@@ -588,7 +588,7 @@ namespace Npgsql
         internal int ValidateAndGetLength()
         {
             if (IsNull) {
-                return -1;
+                return 0;
             }
 
             // No length caching for simple types
