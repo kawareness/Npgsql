@@ -147,6 +147,6 @@ namespace Npgsql
 
         internal Task AsTask => Task.Delay(TimeLeft);
 
-        internal TimeSpan TimeLeft => Expiration - DateTime.Now;
+        internal TimeSpan TimeLeft => IsSet ? Expiration - DateTime.Now : Timeout.InfiniteTimeSpan;
     }
 }

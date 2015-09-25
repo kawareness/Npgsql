@@ -124,12 +124,6 @@ namespace Npgsql
         internal NpgsqlTransaction Transaction { get; set; }
 
         /// <summary>
-        /// The NpgsqlConnection that (currently) owns this connector. Null if the connector isn't
-        /// owned (i.e. idle in the pool)
-        /// </summary>
-        internal NpgsqlConnection Connection { get; set; }
-
-        /// <summary>
         /// The number of messages that were prepended to the current message chain, but not yet sent.
         /// Note that this only tracks messages which produce a ReadyForQuery message
         /// </summary>
@@ -226,6 +220,23 @@ namespace Npgsql
         /// </summary>
         internal const int MinimumInternalCommandTimeout = 3;
 
+        /// <summary>
+        /// Selects the local Secure Sockets Layer (SSL) certificate used for authentication.
+        /// </summary>
+        /// <remarks>
+        /// See <see href="https://msdn.microsoft.com/en-us/library/system.net.security.localcertificateselectioncallback(v=vs.110).aspx"/>
+        /// </remarks>
+        ProvideClientCertificatesCallback _provideClientCertificatesCallback;
+
+        /// <summary>
+        /// Verifies the remote Secure Sockets Layer (SSL) certificate used for authentication.
+        /// Ignored if <see cref="NpgsqlConnectionStringBuilder.TrustServerCertificate"/> is set.
+        /// </summary>
+        /// <remarks>
+        /// See <see href="https://msdn.microsoft.com/en-us/library/system.net.security.remotecertificatevalidationcallback(v=vs.110).aspx"/>
+        /// </remarks>
+        RemoteCertificateValidationCallback _userCertificateValidationCallback;
+
         #endregion
 
         #region Reusable Message Objects
@@ -252,24 +263,17 @@ namespace Npgsql
 
         #region Constructors
 
-        internal NpgsqlConnector(NpgsqlConnection connection)
-            : this(connection.Settings, connection.Password)
-        {
-            Connection = connection;
-            Connection.Connector = this;
-        }
-
         /// <summary>
         /// Creates a new connector with the given connection string.
         /// </summary>
-        /// <param name="connectionString">The connection string.</param>
-        /// <param name="password">The clear-text password or null if not using a password.</param>
-        NpgsqlConnector(NpgsqlConnectionStringBuilder connectionString, string password)
+        internal NpgsqlConnector(NpgsqlConnectionStringBuilder settings, string password, ProvideClientCertificatesCallback provideClientCertificatesCallback, RemoteCertificateValidationCallback userCertificateValidationCallback)
         {
             State = ConnectorState.Closed;
             TransactionStatus = TransactionStatus.Idle;
-            _settings = connectionString;
+            _settings = settings;
             _password = password;
+            _provideClientCertificatesCallback = provideClientCertificatesCallback;
+            _userCertificateValidationCallback = userCertificateValidationCallback;
             BackendParams = new Dictionary<string, string>();
             _messagesToSend = new List<FrontendMessage>();
             _preparedStatementIndex = 0;
@@ -389,7 +393,6 @@ namespace Npgsql
         [RewriteAsync]
         internal void Open(NpgsqlTimeout timeout)
         {
-            Contract.Requires(Connection != null && Connection.Connector == this);
             Contract.Requires(State == ConnectorState.Closed);
 
             State = ConnectorState.Connecting;
@@ -486,16 +489,16 @@ namespace Npgsql
                         break;
                     case 'S':
                         var clientCertificates = new X509CertificateCollection();
-                        Connection.ProvideClientCertificatesCallback?.Invoke(clientCertificates);
+                        _provideClientCertificatesCallback?.Invoke(clientCertificates);
 
                         RemoteCertificateValidationCallback certificateValidationCallback;
                         if (_settings.TrustServerCertificate)
                         {
                             certificateValidationCallback = (sender, certificate, chain, errors) => true;
                         }
-                        else if (Connection.UserCertificateValidationCallback != null)
+                        else if (_userCertificateValidationCallback != null)
                         {
-                            certificateValidationCallback = Connection.UserCertificateValidationCallback;
+                            certificateValidationCallback = _userCertificateValidationCallback;
                         }
                         else
                         {
@@ -1437,7 +1440,7 @@ namespace Npgsql
         {
             lock (_cancelLock)
             {
-                var cancelConnector = new NpgsqlConnector(_settings, _password);
+                var cancelConnector = new NpgsqlConnector(_settings, _password, _provideClientCertificatesCallback, _userCertificateValidationCallback);
                 cancelConnector.DoCancelRequest(BackendProcessId, _backendSecretKey, cancelConnector.ConnectionTimeout);
             }
         }
@@ -1524,11 +1527,11 @@ namespace Npgsql
                 return;
 
             Log.Trace("Break connector", Id);
-            var prevState = State;
+            //var prevState = State;
             State = ConnectorState.Broken;
-            var conn = Connection;
             Cleanup();
 
+            /*
             // We have no connection if we're broken by a keepalive occuring while the connector is in the pool
             if (conn != null)
             {
@@ -1537,6 +1540,7 @@ namespace Npgsql
                 if (prevState != ConnectorState.Connecting)
                 conn.ReallyClose(true);
             }
+            */
         }
 
         /// <summary>
@@ -1545,7 +1549,7 @@ namespace Npgsql
         internal void BreakFromOpen()
         {
             Contract.Requires(State == ConnectorState.Connecting);
-            Contract.Requires(Connection != null);
+            //Contract.Requires(Connection != null);
 
             Log.Trace("Break connector during Open", Id);
             State = ConnectorState.Broken;
@@ -1578,13 +1582,14 @@ namespace Npgsql
             _stream = null;
             _baseStream = null;
             Buffer = null;
-            Connection = null;
             BackendParams.Clear();
             ServerVersion = null;
             _userLock.Dispose();
             _userLock = null;
             _asyncLock.Dispose();
             _asyncLock = null;
+            _userCertificateValidationCallback = null;
+            _provideClientCertificatesCallback = null;
         }
 
         /// <summary>
@@ -1596,8 +1601,6 @@ namespace Npgsql
         internal void Reset()
         {
             Contract.Requires(State == ConnectorState.Ready);
-
-            Connection = null;
 
             switch (State)
             {

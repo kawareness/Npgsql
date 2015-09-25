@@ -596,8 +596,8 @@ namespace Npgsql
             get { return _minPoolSize; }
             set
             {
-                if (value < 0 || value > NpgsqlConnectorPool.PoolSizeLimit)
-                    throw new ArgumentOutOfRangeException(nameof(value), value, "MinPoolSize must be between 0 and " + NpgsqlConnectorPool.PoolSizeLimit);
+                if (value < 0 || value > PoolManager.PoolSizeLimit)
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "MinPoolSize must be between 0 and " + PoolManager.PoolSizeLimit);
                 Contract.EndContractBlock();
 
                 _minPoolSize = value;
@@ -613,14 +613,14 @@ namespace Npgsql
         [Description("The maximum connection pool size.")]
         [DisplayName("Maximum Pool Size")]
         [NpgsqlConnectionStringProperty]
-        [DefaultValue(20)]
+        [DefaultValue(100)]
         public int MaxPoolSize
         {
             get { return _maxPoolSize; }
             set
             {
-                if (value < 0 || value > NpgsqlConnectorPool.PoolSizeLimit)
-                    throw new ArgumentOutOfRangeException(nameof(value), value, "MaxPoolSize must be between 0 and " + NpgsqlConnectorPool.PoolSizeLimit);
+                if (value < 0 || value > PoolManager.PoolSizeLimit)
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "MaxPoolSize must be between 0 and " + PoolManager.PoolSizeLimit);
                 Contract.EndContractBlock();
 
                 _maxPoolSize = value;
@@ -1055,6 +1055,24 @@ namespace Npgsql
         internal NpgsqlConnectionStringBuilder Clone()
         {
             return new NpgsqlConnectionStringBuilder(ConnectionString);
+        }
+
+        /// <summary>
+        /// Determines whether the specified object is equal to the current object.
+        /// </summary>
+        public override bool Equals(object obj)
+        {
+            var o = obj as NpgsqlConnectionStringBuilder;
+            return o != null && o.ConnectionString == ConnectionString;
+        }
+
+        /// <summary>
+        /// Hash function.
+        /// </summary>
+        /// <returns></returns>
+        public override int GetHashCode()
+        {
+            return ConnectionString.GetHashCode();
         }
 
         #endregion
