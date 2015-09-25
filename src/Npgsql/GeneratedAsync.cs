@@ -357,7 +357,7 @@ namespace Npgsql
                 // Get a Connector, either from the pool or creating one ourselves.
                 if (Settings.Pooling)
                 {
-                    Connector = NpgsqlConnectorPool.ConnectorPoolMgr.RequestConnector(this);
+                    PoolManager.GetOrAdd(Settings).Allocate(this, timeout);
                     // Since this pooled connector was opened, global enum/composite mappings may have
                     // changed. Bring this up to date if needed.
                     Connector.TypeHandlerRegistry.ActivateGlobalMappings();

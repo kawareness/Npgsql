@@ -258,7 +258,7 @@ namespace Npgsql
                 // Get a Connector, either from the pool or creating one ourselves.
                 if (Settings.Pooling)
                 {
-                    Connector = NpgsqlConnectorPool.ConnectorPoolMgr.RequestConnector(this);
+                    Connector = PoolManager.GetOrAdd(Settings).Allocate(this, timeout);
 
                     // Since this pooled connector was opened, global enum/composite mappings may have
                     // changed. Bring this up to date if needed.
@@ -633,7 +633,7 @@ namespace Npgsql
 
             if (Settings.Pooling)
             {
-                NpgsqlConnectorPool.ConnectorPoolMgr.ReleaseConnector(this, Connector);
+                PoolManager.GetOrAdd(Settings).Release(Connector);
             }
             else
             {
@@ -1465,7 +1465,8 @@ namespace Npgsql
         /// </summary>
         public static void ClearPool(NpgsqlConnection connection)
         {
-            NpgsqlConnectorPool.ConnectorPoolMgr.ClearPool(connection);
+            throw new NotImplementedException();
+            //NpgsqlConnectorPool.ConnectorPoolMgr.ClearPool(connection);
         }
 
         /// <summary>
@@ -1473,7 +1474,8 @@ namespace Npgsql
         /// </summary>
         public static void ClearAllPools()
         {
-            NpgsqlConnectorPool.ConnectorPoolMgr.ClearAllPools();
+            throw new NotImplementedException();
+            //NpgsqlConnectorPool.ConnectorPoolMgr.ClearAllPools();
         }
 
         /// <summary>
