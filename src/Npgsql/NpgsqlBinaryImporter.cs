@@ -238,7 +238,7 @@ namespace Npgsql
                             len = directBuf.Size == 0 ? directBuf.Buffer.Length : directBuf.Size;
                             _buf.WritePosition = 1;
                             _buf.WriteInt32(len + 4);
-                            _buf.Flush();
+                            _buf.Send();
                             _writingDataMsg = false;
                             _buf.Underlying.Write(directBuf.Buffer, directBuf.Offset, len);
                             directBuf.Buffer = null;
@@ -305,7 +305,7 @@ namespace Npgsql
             _buf.WritePosition = 1;
             _buf.WriteInt32(pos - 1);
             _buf.WritePosition = pos;
-            _buf.Flush();
+            _buf.Send();
             _writingDataMsg = false;
         }
 

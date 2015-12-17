@@ -29,13 +29,14 @@ using System.Data.Common;
 using System.Diagnostics.Contracts;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using AsyncRewriter;
 using JetBrains.Annotations;
 using Npgsql.BackendMessages;
+using Npgsql.FrontendMessages;
+using Npgsql.Logging;
 using Npgsql.TypeHandlers;
 using Npgsql.TypeHandlers.NumericHandlers;
 using NpgsqlTypes;
@@ -47,6 +48,8 @@ namespace Npgsql
     /// </summary>
     public partial class NpgsqlDataReader : DbDataReader
     {
+        #region Fields
+
         internal NpgsqlCommand Command { get; }
         readonly NpgsqlConnector _connector;
         readonly NpgsqlConnection _connection;
@@ -55,14 +58,25 @@ namespace Npgsql
         ReaderState State { get; set; }
 
         /// <summary>
+        /// Holds the messages to be sent to the server.
+        /// </summary>
+        readonly Queue<FrontendMessage> _messageChain;
+
+        /// <summary>
         /// Holds the list of statements being executed by this reader.
         /// </summary>
         readonly List<NpgsqlStatement> _statements;
 
         /// <summary>
-        /// The index of the current query resultset we're processing (within a multiquery)
+        /// The number of statements that have been fully processed by the user.
+        /// Equal to the number of times <see cref="NextResult"/> has been called.
         /// </summary>
-        int _statementIndex;
+        int _statementsConsumed;
+
+        /// <summary>
+        /// The number of statements that have been fully sent to the database.
+        /// </summary>
+        int _statementsSent;
 
         /// <summary>
         /// The RowDescription message for the current resultset being processed
@@ -108,22 +122,28 @@ namespace Npgsql
         // static readonly NpgsqlLogger Log = NpgsqlLogManager.GetCurrentClassLogger();
 
         bool IsSequential => (_behavior & CommandBehavior.SequentialAccess) != 0;
-        bool IsCaching => !IsSequential;
+        bool IsCaching    => !IsSequential;
         bool IsSchemaOnly => (_behavior & CommandBehavior.SchemaOnly) != 0;
+        bool IsPrepared   => Command.IsPrepared;
 
-        internal NpgsqlDataReader(NpgsqlCommand command, CommandBehavior behavior, List<NpgsqlStatement> statements)
+        static readonly NpgsqlLogger Log = NpgsqlLogManager.GetCurrentClassLogger();
+
+        #endregion
+
+        internal NpgsqlDataReader(NpgsqlCommand command, CommandBehavior behavior, Queue<FrontendMessage> messageChain, List<NpgsqlStatement> statements)
         {
             Command = command;
             _connection = command.Connection;
             _connector = _connection.Connector;
             _behavior = behavior;
+            _messageChain = messageChain;
+            _statements = statements;
 
-            State = IsSchemaOnly ? ReaderState.BetweenResults : ReaderState.InResult;
+            State = ReaderState.BetweenResults;
 
             if (IsCaching) {
                 _rowCache = new RowCache();
             }
-            _statements = statements;
         }
 
         [RewriteAsync]
@@ -301,51 +321,51 @@ namespace Npgsql
 
             switch (msg.Code)
             {
-                case BackendMessageCode.DataRow:
-                    Contract.Assert(_rowDescription != null);
-                    _connector.State = ConnectorState.Fetching;
-                    _row = (DataRowMessage)msg;
-                    Contract.Assume(_rowDescription.NumFields == _row.NumColumns);
-                    if (IsCaching) { _rowCache.Clear(); }
-                    _readOneRow = true;
-                    _hasRows = true;
-                    return ReadResult.RowRead;
+            case BackendMessageCode.DataRow:
+                Contract.Assert(_rowDescription != null);
+                _connector.State = ConnectorState.Fetching;
+                _row = (DataRowMessage)msg;
+                Contract.Assume(_rowDescription.NumFields == _row.NumColumns);
+                if (IsCaching) { _rowCache.Clear(); }
+                _readOneRow = true;
+                _hasRows = true;
+                return ReadResult.RowRead;
 
-                case BackendMessageCode.CompletedResponse:
-                    var completed = (CommandCompleteMessage) msg;
-                    switch (completed.StatementType)
-                    {
-                        case StatementType.Update:
-                        case StatementType.Insert:
-                        case StatementType.Delete:
-                        case StatementType.Copy:
-                            if (!_recordsAffected.HasValue) {
-                                _recordsAffected = 0;
-                            }
-                            _recordsAffected += completed.Rows;
-                            break;
-                    }
+            case BackendMessageCode.CompletedResponse:
+                var completed = (CommandCompleteMessage) msg;
+                switch (completed.StatementType)
+                {
+                    case StatementType.Update:
+                    case StatementType.Insert:
+                    case StatementType.Delete:
+                    case StatementType.Copy:
+                        if (!_recordsAffected.HasValue) {
+                            _recordsAffected = 0;
+                        }
+                        _recordsAffected += completed.Rows;
+                        break;
+                }
 
-                    _statements[_statementIndex].StatementType = completed.StatementType;
-                    _statements[_statementIndex].Rows = completed.Rows;
-                    _statements[_statementIndex].OID = completed.OID;
+                _statements[_statementsConsumed].StatementType = completed.StatementType;
+                _statements[_statementsConsumed].Rows = completed.Rows;
+                _statements[_statementsConsumed].OID = completed.OID;
+                _statementsConsumed++;
+                goto case BackendMessageCode.EmptyQueryResponse;
 
-                    goto case BackendMessageCode.EmptyQueryResponse;
+            case BackendMessageCode.EmptyQueryResponse:
+                State = ReaderState.BetweenResults;
+                return ReadResult.RowNotRead;
 
-                case BackendMessageCode.EmptyQueryResponse:
-                    State = ReaderState.BetweenResults;
-                    return ReadResult.RowNotRead;
+            case BackendMessageCode.ReadyForQuery:
+                State = ReaderState.Consumed;
+                return ReadResult.RowNotRead;
 
-                case BackendMessageCode.ReadyForQuery:
-                    State = ReaderState.Consumed;
-                    return ReadResult.RowNotRead;
+            case BackendMessageCode.BindComplete:
+            case BackendMessageCode.CloseComplete:
+                return ReadResult.ReadAgain;
 
-                case BackendMessageCode.BindComplete:
-                case BackendMessageCode.CloseComplete:
-                    return ReadResult.ReadAgain;
-
-                default:
-                    throw new Exception("Received unexpected backend message of type " + msg.Code);
+            default:
+                throw new Exception("Received unexpected backend message of type " + msg.Code);
             }
         }
 
@@ -373,36 +393,35 @@ namespace Npgsql
             return IsSchemaOnly ? NextResultSchemaOnly() : await NextResultInternalAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        [RewriteAsync]
+        //[RewriteAsync]
         bool NextResultInternal()
         {
             Contract.Requires(!IsSchemaOnly);
-            // Contract.Ensures(Command.CommandType != CommandType.StoredProcedure || Contract.Result<bool>() == false);
 
             try
             {
-                // If we're in the middle of a resultset, consume it
                 switch (State)
                 {
-                    case ReaderState.InResult:
-                        if (_row != null) {
-                            _row.Consume();
-                            _row = null;
-                        }
+                // If we're in the middle of a resultset, consume it
+                case ReaderState.InResult:
+                    if (_row != null) {
+                        _row.Consume();
+                        _row = null;
+                    }
 
-                        // TODO: Duplication with SingleResult handling above
-                        var completedMsg = SkipUntil(BackendMessageCode.CompletedResponse, BackendMessageCode.EmptyQueryResponse);
-                        ProcessMessage(completedMsg);
-                        break;
+                    // TODO: Duplication with SingleResult handling above
+                    var completedMsg = SkipUntil(BackendMessageCode.CompletedResponse, BackendMessageCode.EmptyQueryResponse);
+                    ProcessMessage(completedMsg);
+                    break;
 
-                    case ReaderState.BetweenResults:
-                        break;
+                case ReaderState.BetweenResults:
+                    break;
 
-                    case ReaderState.Consumed:
-                    case ReaderState.Closed:
-                        return false;
-                    default:
-                        throw new ArgumentOutOfRangeException();
+                case ReaderState.Consumed:
+                case ReaderState.Closed:
+                    return false;
+                default:
+                    throw new ArgumentOutOfRangeException();
                 }
 
                 Contract.Assert(State == ReaderState.BetweenResults);
@@ -412,38 +431,143 @@ namespace Npgsql
 #endif
 
                 if ((_behavior & CommandBehavior.SingleResult) != 0)
+                    throw new NotImplementedException();
+
+                // Send more messages if needed and process the results until we get to a new resultset
+                while (true)
+                {
+                    while (_statementsConsumed < _statementsSent)
+                    {
+                        // TODO: Error handling, e.g. bad SQL!
+                        var statement = _statements[_statementsConsumed];
+                        if (!IsPrepared) {
+                            ReadExpecting<ParseCompleteMessage>();
+                        }
+
+                        ReadExpecting<BindCompleteMessage>();
+
+                        if (!IsPrepared)
+                        {
+                            var msg = ReadMessage();
+                            switch (msg.Code)
+                            {
+                            case BackendMessageCode.RowDescription:
+                                statement.Description = (RowDescriptionMessage)msg;
+                                break;
+                            case BackendMessageCode.NoData:
+                                statement.Description = null;
+                                break;
+                            default:
+                                throw new Exception($"Received unexpected backend message {msg.Code}. Please file a bug.");
+                            }
+                        }
+
+                        if (_statements[_statementsConsumed].Description == null)
+                        {
+                            // No resultset (e.g. INSERT), consume the CommandComplete and continue to the next statements
+                            var msg = ReadMessage();
+                            if (msg is CommandCompleteMessage || msg is EmptyQueryMessage)
+                            {
+                                ProcessMessage(msg);
+                                continue;
+                            }
+                            throw new Exception($"Received unexpected backend message {msg.Code}. Please file a bug.");
+                        }
+                        // Ladies and gentlement, we have a resultset
+                        _rowDescription = statement.Description;
+                        State = ReaderState.InResult;
+                        return true;
+                    }
+
+                    // User has consumed result sets for all sent statements
+
+                    if (_statementsSent == _statements.Count)
+                    {
+                        // There are no more queries, we're done. Read to the RFQ.
+                        ProcessMessage(SkipUntil(BackendMessageCode.ReadyForQuery));
+                        _rowDescription = null;
+                        return false;
+                    }
+
+                    SendMoreStatements();
+                    Contract.Assert(_statementsConsumed < _statementsSent);
+                }
+                /*
+                if ((_behavior & CommandBehavior.SingleResult) != 0)
                 {
                     if (State == ReaderState.BetweenResults) {
                         Consume();
                     }
                     return false;
                 }
-
-                // We are now at the end of the previous result set. Read up to the next result set, if any.
-                for (_statementIndex++; _statementIndex < _statements.Count; _statementIndex++)
-                {
-                    _rowDescription = _statements[_statementIndex].Description;
-                    if (_rowDescription != null)
-                    {
-                        State = ReaderState.InResult;
-                        // Found a resultset
-                        return true;
-                    }
-
-                    // Next query has no resultset, read and process its completion message and move on to the next
-                    var completedMsg = SkipUntil(BackendMessageCode.CompletedResponse, BackendMessageCode.EmptyQueryResponse);
-                    ProcessMessage(completedMsg);
-                }
-
-                // There are no more queries, we're done. Read to the RFQ.
-                ProcessMessage(SkipUntil(BackendMessageCode.ReadyForQuery));
-                _rowDescription = null;
-                return false;
+                */
             }
             catch (NpgsqlException)
             {
                 State = ReaderState.Consumed;
                 throw;
+            }
+        }
+
+        void SendMoreStatements()
+        {
+            Contract.Requires(_messageChain.Any());
+
+            var buf = _connector.Buffer;
+            while (true)
+            {
+                if (!_messageChain.Any())
+                {
+                    // Finished sending everything
+                    buf.Send();
+                    return;
+                }
+
+                var msg = _messageChain.Peek();
+
+                Log.Trace($"Sending: {msg}", _connector.Id);
+
+                var asSimple = msg as SimpleFrontendMessage;
+                if (asSimple != null)
+                {
+                    if (asSimple.Length > buf.WriteSpaceLeft)
+                    {
+                        buf.Send();
+                    }
+                    Contract.Assume(buf.WriteSpaceLeft >= asSimple.Length);
+                    asSimple.Write(buf);
+                }
+                else
+                {
+                    var asComplex = msg as ChunkingFrontendMessage;
+                    if (asComplex != null)
+                    {
+                        var directBuf = new DirectBuffer();
+                        while (!asComplex.Write(buf, ref directBuf))
+                        {
+                            buf.Send();
+
+                            // The following is an optimization hack for writing large byte arrays without passing
+                            // through our buffer
+                            if (directBuf.Buffer != null)
+                            {
+                                throw new NotImplementedException();
+                                /*
+                                buf.Underlying.Write(directBuf.Buffer, directBuf.Offset,
+                                    directBuf.Size == 0 ? directBuf.Buffer.Length : directBuf.Size);
+                                directBuf.Buffer = null;
+                                directBuf.Size = 0;
+                                */
+                            }
+                        }
+                    } else throw PGUtil.ThrowIfReached();
+                }
+
+                // Message has been fully sent, remove it from the chain
+                _messageChain.Dequeue();
+                if (msg is ExecuteMessage) {
+                    _statementsSent++;
+                }
             }
         }
 
@@ -455,6 +579,8 @@ namespace Npgsql
         {
             Contract.Requires(IsSchemaOnly);
 
+            throw new NotImplementedException();
+            /*
             for (_statementIndex++; _statementIndex < _statements.Count; _statementIndex++)
             {
                 _rowDescription = _statements[_statementIndex].Description;
@@ -466,9 +592,22 @@ namespace Npgsql
             }
 
             return false;
+            */
         }
 
         #endregion
+
+        internal T ReadExpecting<T>() where T : class, IBackendMessage
+        {
+            var msg = ReadMessage();
+            var asExpected = msg as T;
+            if (asExpected == null)
+            {
+                _connector.Break();
+                throw new Exception($"Received backend message {msg.Code} while expecting {typeof(T).Name}. Please file a bug.");
+            }
+            return asExpected;
+        }
 
         [RewriteAsync]
         IBackendMessage ReadMessage()
@@ -549,7 +688,7 @@ namespace Npgsql
                 if (_hasRows.HasValue) {
                     return _hasRows.Value;
                 }
-                if (_statementIndex >= _statements.Count) {
+                if (_statementsConsumed == _statements.Count) {
                     return false;
                 }
                 while (true)

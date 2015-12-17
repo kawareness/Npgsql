@@ -26,6 +26,7 @@ using System.Collections.Generic;
 using System.Diagnostics.Contracts;
 using System.Linq;
 using System.Text;
+using JetBrains.Annotations;
 
 namespace Npgsql.FrontendMessages
 {
@@ -52,16 +53,14 @@ namespace Npgsql.FrontendMessages
 
         const byte Code = (byte)'B';
 
-        internal BindMessage Populate(List<NpgsqlParameter> inputParameters, string portal = "", string statement = "")
+        internal BindMessage Populate(List<NpgsqlParameter> inputParameters, string statement = null, string portal = null)
         {
             Contract.Requires(inputParameters != null && inputParameters.All(p => p.IsInputDirection));
-            Contract.Requires(portal != null);
-            Contract.Requires(statement != null);
 
             AllResultTypesAreUnknown = false;
             UnknownResultTypeList = null;
-            Portal = portal;
-            Statement = statement;
+            Statement = statement ?? "";
+            Portal = portal ?? "";
             InputParameters = inputParameters;
             _state = State.WroteNothing;
             _paramIndex = 0;
@@ -205,7 +204,7 @@ namespace Npgsql.FrontendMessages
 
         public override string ToString()
         {
-            return $"[Bind(Portal={Portal},Statement={Statement},NumParams={InputParameters.Count}]";
+            return $"[Bind(Statement={Statement},Portal={Portal},NumParams={InputParameters.Count}]";
         }
 
         private enum State

@@ -42,10 +42,10 @@ namespace Npgsql.FrontendMessages
 
         const byte Code = (byte)'D';
 
-        internal DescribeMessage Populate(StatementOrPortal type, string name = "")
+        internal DescribeMessage Populate(StatementOrPortal type, string name = null)
         {
             StatementOrPortal = type;
-            Name = name;
+            Name = name ?? "";
             return this;
         }
 

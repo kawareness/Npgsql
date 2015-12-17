@@ -122,7 +122,7 @@ namespace Npgsql
 
                 _buf.WriteByte((byte)BackendMessageCode.CopyData);
                 _buf.WriteInt32(count + 4);
-                _buf.Flush();
+                _buf.Send();
                 _buf.Underlying.Write(buffer, offset, count);
                 EnsureDataMessage();
             } catch {
@@ -142,7 +142,7 @@ namespace Npgsql
             _buf.WritePosition = 1;
             _buf.WriteInt32(pos - 1);
             _buf.WritePosition = pos;
-            _buf.Flush();
+            _buf.Send();
             _writingDataMsg = false;
         }
 

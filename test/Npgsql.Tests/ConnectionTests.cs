@@ -123,7 +123,7 @@ namespace Npgsql.Tests
                     if (args.CurrentState == ConnectionState.Closed)
                         eventBroken = true;
                 };
-                Assert.That(() => ExecuteScalar("SELECT 1", conn), Throws.Exception.TypeOf<IOException>());
+                Assert.That(() => ExecuteScalar("SELECT 1", conn), Throws.Exception.TypeOf<SocketException>());
                 Assert.That(conn.State, Is.EqualTo(ConnectionState.Closed));
                 Assert.That(conn.FullState, Is.EqualTo(ConnectionState.Broken));
                 Assert.That(eventBroken, Is.True);

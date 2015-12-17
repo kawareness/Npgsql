@@ -25,6 +25,7 @@ using System;
 using System.Diagnostics.Contracts;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using AsyncRewriter;
@@ -34,6 +35,8 @@ namespace Npgsql
     internal partial class NpgsqlBuffer
     {
         #region Fields and Properties
+
+        readonly Socket _socket;
 
         internal Stream Underlying { get; set; }
         /// <summary>
@@ -67,7 +70,7 @@ namespace Npgsql
 
         internal long TotalBytesFlushed { get; private set; }
 
-        internal readonly byte[] _buf;
+        internal byte[] Data { get; }
         int _filledBytes;
         readonly Decoder _textDecoder;
         readonly Encoder _textEncoder;
@@ -93,17 +96,24 @@ namespace Npgsql
 
         #region Constructors
 
-        internal NpgsqlBuffer(Stream underlying, int size, Encoding textEncoding)
+        internal NpgsqlBuffer(Socket socket, Stream underlying, int size, Encoding textEncoding)
+            : this(size, textEncoding)
         {
-            if (size < MinimumBufferSize) {
+            _socket = socket;
+            Underlying = underlying;
+        }
+
+        internal NpgsqlBuffer(int size, Encoding textEncoding)
+        {
+            if (size < MinimumBufferSize)
+            {
                 throw new ArgumentOutOfRangeException(nameof(size), size, "Buffer size must be at least " + MinimumBufferSize);
             }
             Contract.EndContractBlock();
 
-            Underlying = underlying;
             Size = size;
             UsableSize = Size;
-            _buf = new byte[Size];
+            Data = new byte[Size];
             TextEncoding = textEncoding;
             _textDecoder = TextEncoding.GetDecoder();
             _textEncoder = TextEncoding.GetEncoder();
@@ -125,7 +135,7 @@ namespace Npgsql
             if (ReadPosition == _filledBytes) {
                 Clear();
             } else if (count > Size - _filledBytes) {
-                Array.Copy(_buf, ReadPosition, _buf, 0, ReadBytesLeft);
+                Array.Copy(Data, ReadPosition, Data, 0, ReadBytesLeft);
                 _filledBytes = ReadBytesLeft;
                 ReadPosition = 0;
             }
@@ -133,7 +143,7 @@ namespace Npgsql
             while (count > 0)
             {
                 var toRead = Size - _filledBytes;
-                var read = Underlying.Read(_buf, _filledBytes, toRead);
+                var read = Underlying.Read(Data, _filledBytes, toRead);
                 if (read == 0) { throw new EndOfStreamException(); }
                 count -= read;
                 _filledBytes += read;
@@ -163,7 +173,7 @@ namespace Npgsql
             // Worst case: our buffer isn't big enough. For now, allocate a new buffer
             // and copy into it
             // TODO: Optimize with a pool later?
-            var tempBuf = new NpgsqlBuffer(Underlying, count, TextEncoding);
+            var tempBuf = new NpgsqlBuffer(_socket, Underlying, count, TextEncoding);
             CopyTo(tempBuf);
             Clear();
             tempBuf.Ensure(count);
@@ -192,15 +202,14 @@ namespace Npgsql
         }
 
         [RewriteAsync]
-        public void Flush()
+        public void Send()
         {
             if (_writePosition != 0)
             {
                 Contract.Assert(ReadBytesLeft == 0, "There cannot be read bytes buffered while a write operation is going on.");
-                Underlying.Write(_buf, 0, _writePosition);
-                Underlying.Flush();
-                TotalBytesFlushed += _writePosition;
-                _writePosition = 0;
+                var count = _socket.Send(Data, 0, _writePosition, SocketFlags.None);
+                TotalBytesFlushed += count;
+                _writePosition -= count;
             }
         }
 
@@ -211,13 +220,13 @@ namespace Npgsql
         internal byte ReadByte()
         {
             Contract.Requires(ReadBytesLeft >= sizeof(byte));
-            return _buf[ReadPosition++];
+            return Data[ReadPosition++];
         }
 
         internal short ReadInt16()
         {
             Contract.Requires(ReadBytesLeft >= sizeof(short));
-            var result = IPAddress.NetworkToHostOrder(BitConverter.ToInt16(_buf, ReadPosition));
+            var result = IPAddress.NetworkToHostOrder(BitConverter.ToInt16(Data, ReadPosition));
             ReadPosition += 2;
             return result;
         }
@@ -225,7 +234,7 @@ namespace Npgsql
         internal int ReadInt32()
         {
             Contract.Requires(ReadBytesLeft >= sizeof(int));
-            var result = IPAddress.NetworkToHostOrder(BitConverter.ToInt32(_buf, ReadPosition));
+            var result = IPAddress.NetworkToHostOrder(BitConverter.ToInt32(Data, ReadPosition));
             ReadPosition += 4;
             return result;
         }
@@ -233,7 +242,7 @@ namespace Npgsql
         internal uint ReadUInt32()
         {
             Contract.Requires(ReadBytesLeft >= sizeof(int));
-            var result = (uint)IPAddress.NetworkToHostOrder(BitConverter.ToInt32(_buf, ReadPosition));
+            var result = (uint)IPAddress.NetworkToHostOrder(BitConverter.ToInt32(Data, ReadPosition));
             ReadPosition += 4;
             return result;
         }
@@ -241,7 +250,7 @@ namespace Npgsql
         internal long ReadInt64()
         {
             Contract.Requires(ReadBytesLeft >= sizeof(long));
-            var result = IPAddress.NetworkToHostOrder(BitConverter.ToInt64(_buf, ReadPosition));
+            var result = IPAddress.NetworkToHostOrder(BitConverter.ToInt64(Data, ReadPosition));
             ReadPosition += 8;
             return result;
         }
@@ -251,15 +260,15 @@ namespace Npgsql
             Contract.Requires(ReadBytesLeft >= sizeof(float));
             if (BitConverter.IsLittleEndian)
             {
-                _workspace[3] = _buf[ReadPosition++];
-                _workspace[2] = _buf[ReadPosition++];
-                _workspace[1] = _buf[ReadPosition++];
-                _workspace[0] = _buf[ReadPosition++];
+                _workspace[3] = Data[ReadPosition++];
+                _workspace[2] = Data[ReadPosition++];
+                _workspace[1] = Data[ReadPosition++];
+                _workspace[0] = Data[ReadPosition++];
                 return BitConverter.ToSingle(_workspace, 0);
             }
             else
             {
-                var result = BitConverter.ToSingle(_buf, ReadPosition);
+                var result = BitConverter.ToSingle(Data, ReadPosition);
                 ReadPosition += 4;
                 return result;
             }
@@ -270,19 +279,19 @@ namespace Npgsql
             Contract.Requires(ReadBytesLeft >= sizeof(double));
             if (BitConverter.IsLittleEndian)
             {
-                _workspace[7] = _buf[ReadPosition++];
-                _workspace[6] = _buf[ReadPosition++];
-                _workspace[5] = _buf[ReadPosition++];
-                _workspace[4] = _buf[ReadPosition++];
-                _workspace[3] = _buf[ReadPosition++];
-                _workspace[2] = _buf[ReadPosition++];
-                _workspace[1] = _buf[ReadPosition++];
-                _workspace[0] = _buf[ReadPosition++];
+                _workspace[7] = Data[ReadPosition++];
+                _workspace[6] = Data[ReadPosition++];
+                _workspace[5] = Data[ReadPosition++];
+                _workspace[4] = Data[ReadPosition++];
+                _workspace[3] = Data[ReadPosition++];
+                _workspace[2] = Data[ReadPosition++];
+                _workspace[1] = Data[ReadPosition++];
+                _workspace[0] = Data[ReadPosition++];
                 return BitConverter.ToDouble(_workspace, 0);
             }
             else
             {
-                var result = BitConverter.ToDouble(_buf, ReadPosition);
+                var result = BitConverter.ToDouble(Data, ReadPosition);
                 ReadPosition += 8;
                 return result;
             }
@@ -291,7 +300,7 @@ namespace Npgsql
         internal string ReadString(int byteLen)
         {
             Contract.Requires(byteLen <= ReadBytesLeft);
-            var result = TextEncoding.GetString(_buf, ReadPosition, byteLen);
+            var result = TextEncoding.GetString(Data, ReadPosition, byteLen);
             ReadPosition += byteLen;
             return result;
         }
@@ -299,7 +308,7 @@ namespace Npgsql
         internal char[] ReadChars(int byteLen)
         {
             Contract.Requires(byteLen <= ReadBytesLeft);
-            var result = TextEncoding.GetChars(_buf, ReadPosition, byteLen);
+            var result = TextEncoding.GetChars(Data, ReadPosition, byteLen);
             ReadPosition += byteLen;
             return result;
         }
@@ -307,7 +316,7 @@ namespace Npgsql
         internal void ReadBytes(byte[] output, int outputOffset, int len)
         {
             Contract.Requires(len <= ReadBytesLeft);
-            Buffer.BlockCopy(_buf, ReadPosition, output, outputOffset, len);
+            Buffer.BlockCopy(Data, ReadPosition, output, outputOffset, len);
             ReadPosition += len;
         }
 
@@ -320,12 +329,12 @@ namespace Npgsql
         {
             if (len <= ReadBytesLeft)
             {
-                Array.Copy(_buf, ReadPosition, output, outputOffset, len);
+                Array.Copy(Data, ReadPosition, output, outputOffset, len);
                 ReadPosition += len;
                 return len;
             }
 
-            Array.Copy(_buf, ReadPosition, output, outputOffset, ReadBytesLeft);
+            Array.Copy(Data, ReadPosition, output, outputOffset, ReadBytesLeft);
             var offset = outputOffset + ReadBytesLeft;
             var totalRead = ReadBytesLeft;
             Clear();
@@ -357,12 +366,12 @@ namespace Npgsql
         internal string ReadNullTerminatedString(Encoding encoding)
         {
             int i;
-            for (i = ReadPosition; _buf[i] != 0; i++)
+            for (i = ReadPosition; Data[i] != 0; i++)
             {
                 Contract.Assume(i <= ReadPosition + ReadBytesLeft);
             }
             Contract.Assert(i >= ReadPosition);
-            var result = encoding.GetString(_buf, ReadPosition, i - ReadPosition);
+            var result = encoding.GetString(Data, ReadPosition, i - ReadPosition);
             ReadPosition = i + 1;
             return result;
         }
@@ -396,7 +405,7 @@ namespace Npgsql
                     int bytesUsed, charsUsed;
                     bool completed;
                     var maxBytes = Math.Min(byteCount - bytesRead, ReadBytesLeft);
-                    _textDecoder.Convert(_buf, ReadPosition, maxBytes, output, outputOffset, charCount - charsRead, false,
+                    _textDecoder.Convert(Data, ReadPosition, maxBytes, output, outputOffset, charCount - charsRead, false,
                                          out bytesUsed, out charsUsed, out completed);
                     ReadPosition += bytesUsed;
                     bytesRead += bytesUsed;
@@ -443,24 +452,24 @@ namespace Npgsql
         public void WriteByte(byte b)
         {
             Contract.Requires(WriteSpaceLeft >= sizeof(byte));
-            _buf[_writePosition++] = b;
+            Data[_writePosition++] = b;
         }
 
         public void WriteInt16(int i)
         {
             Contract.Requires(WriteSpaceLeft >= sizeof(short));
-            _buf[_writePosition++] = (byte)(i >> 8);
-            _buf[_writePosition++] = (byte)i;
+            Data[_writePosition++] = (byte)(i >> 8);
+            Data[_writePosition++] = (byte)i;
         }
 
         public void WriteInt32(int i)
         {
             Contract.Requires(WriteSpaceLeft >= sizeof(int));
             var pos = _writePosition;
-            _buf[pos++] = (byte)(i >> 24);
-            _buf[pos++] = (byte)(i >> 16);
-            _buf[pos++] = (byte)(i >> 8);
-            _buf[pos++] = (byte)i;
+            Data[pos++] = (byte)(i >> 24);
+            Data[pos++] = (byte)(i >> 16);
+            Data[pos++] = (byte)(i >> 8);
+            Data[pos++] = (byte)i;
             _writePosition = pos;
         }
 
@@ -468,10 +477,10 @@ namespace Npgsql
         {
             Contract.Requires(WriteSpaceLeft >= sizeof(uint));
             var pos = _writePosition;
-            _buf[pos++] = (byte)(i >> 24);
-            _buf[pos++] = (byte)(i >> 16);
-            _buf[pos++] = (byte)(i >> 8);
-            _buf[pos++] = (byte)i;
+            Data[pos++] = (byte)(i >> 24);
+            Data[pos++] = (byte)(i >> 16);
+            Data[pos++] = (byte)(i >> 8);
+            Data[pos++] = (byte)i;
             _writePosition = pos;
         }
 
@@ -479,14 +488,14 @@ namespace Npgsql
         {
             Contract.Requires(WriteSpaceLeft >= sizeof(long));
             var pos = _writePosition;
-            _buf[pos++] = (byte)(i >> 56);
-            _buf[pos++] = (byte)(i >> 48);
-            _buf[pos++] = (byte)(i >> 40);
-            _buf[pos++] = (byte)(i >> 32);
-            _buf[pos++] = (byte)(i >> 24);
-            _buf[pos++] = (byte)(i >> 16);
-            _buf[pos++] = (byte)(i >> 8);
-            _buf[pos++] = (byte)i;
+            Data[pos++] = (byte)(i >> 56);
+            Data[pos++] = (byte)(i >> 48);
+            Data[pos++] = (byte)(i >> 40);
+            Data[pos++] = (byte)(i >> 32);
+            Data[pos++] = (byte)(i >> 24);
+            Data[pos++] = (byte)(i >> 16);
+            Data[pos++] = (byte)(i >> 8);
+            Data[pos++] = (byte)i;
             _writePosition = pos;
         }
 
@@ -497,17 +506,17 @@ namespace Npgsql
             var pos = _writePosition;
             if (BitConverter.IsLittleEndian)
             {
-                _buf[pos++] = _bitConverterUnion.b3;
-                _buf[pos++] = _bitConverterUnion.b2;
-                _buf[pos++] = _bitConverterUnion.b1;
-                _buf[pos++] = _bitConverterUnion.b0;
+                Data[pos++] = _bitConverterUnion.b3;
+                Data[pos++] = _bitConverterUnion.b2;
+                Data[pos++] = _bitConverterUnion.b1;
+                Data[pos++] = _bitConverterUnion.b0;
             }
             else
             {
-                _buf[pos++] = _bitConverterUnion.b0;
-                _buf[pos++] = _bitConverterUnion.b1;
-                _buf[pos++] = _bitConverterUnion.b2;
-                _buf[pos++] = _bitConverterUnion.b3;
+                Data[pos++] = _bitConverterUnion.b0;
+                Data[pos++] = _bitConverterUnion.b1;
+                Data[pos++] = _bitConverterUnion.b2;
+                Data[pos++] = _bitConverterUnion.b3;
             }
             _writePosition = pos;
         }
@@ -519,25 +528,25 @@ namespace Npgsql
             var pos = _writePosition;
             if (BitConverter.IsLittleEndian)
             {
-                _buf[pos++] = _bitConverterUnion.b7;
-                _buf[pos++] = _bitConverterUnion.b6;
-                _buf[pos++] = _bitConverterUnion.b5;
-                _buf[pos++] = _bitConverterUnion.b4;
-                _buf[pos++] = _bitConverterUnion.b3;
-                _buf[pos++] = _bitConverterUnion.b2;
-                _buf[pos++] = _bitConverterUnion.b1;
-                _buf[pos++] = _bitConverterUnion.b0;
+                Data[pos++] = _bitConverterUnion.b7;
+                Data[pos++] = _bitConverterUnion.b6;
+                Data[pos++] = _bitConverterUnion.b5;
+                Data[pos++] = _bitConverterUnion.b4;
+                Data[pos++] = _bitConverterUnion.b3;
+                Data[pos++] = _bitConverterUnion.b2;
+                Data[pos++] = _bitConverterUnion.b1;
+                Data[pos++] = _bitConverterUnion.b0;
             }
             else
             {
-                _buf[pos++] = _bitConverterUnion.b0;
-                _buf[pos++] = _bitConverterUnion.b1;
-                _buf[pos++] = _bitConverterUnion.b2;
-                _buf[pos++] = _bitConverterUnion.b3;
-                _buf[pos++] = _bitConverterUnion.b4;
-                _buf[pos++] = _bitConverterUnion.b5;
-                _buf[pos++] = _bitConverterUnion.b6;
-                _buf[pos++] = _bitConverterUnion.b7;
+                Data[pos++] = _bitConverterUnion.b0;
+                Data[pos++] = _bitConverterUnion.b1;
+                Data[pos++] = _bitConverterUnion.b2;
+                Data[pos++] = _bitConverterUnion.b3;
+                Data[pos++] = _bitConverterUnion.b4;
+                Data[pos++] = _bitConverterUnion.b5;
+                Data[pos++] = _bitConverterUnion.b6;
+                Data[pos++] = _bitConverterUnion.b7;
             }
             _writePosition = pos;
         }
@@ -545,19 +554,19 @@ namespace Npgsql
         internal void WriteString(string s, int len = 0)
         {
             Contract.Requires(TextEncoding.GetByteCount(s) <= WriteSpaceLeft);
-            WritePosition += TextEncoding.GetBytes(s, 0, len == 0 ? s.Length : len, _buf, WritePosition);
+            WritePosition += TextEncoding.GetBytes(s, 0, len == 0 ? s.Length : len, Data, WritePosition);
         }
 
         internal void WriteChars(char[] chars, int len = 0)
         {
             Contract.Requires(TextEncoding.GetByteCount(chars) <= WriteSpaceLeft);
-            WritePosition += TextEncoding.GetBytes(chars, 0, len == 0 ? chars.Length : len, _buf, WritePosition);
+            WritePosition += TextEncoding.GetBytes(chars, 0, len == 0 ? chars.Length : len, Data, WritePosition);
         }
 
         public void WriteBytes(byte[] buf, int offset, int count)
         {
             Contract.Requires(count <= WriteSpaceLeft);
-            Buffer.BlockCopy(buf, offset, _buf, WritePosition, count);
+            Buffer.BlockCopy(buf, offset, Data, WritePosition, count);
             WritePosition += count;
         }
 
@@ -576,7 +585,7 @@ namespace Npgsql
                                          bool flush, out int charsUsed, out bool completed)
         {
             int bytesUsed;
-            _textEncoder.Convert(chars, charIndex, charCount, _buf, WritePosition, WriteSpaceLeft,
+            _textEncoder.Convert(chars, charIndex, charCount, Data, WritePosition, WriteSpaceLeft,
                                  flush, out charsUsed, out bytesUsed, out completed);
             WritePosition += bytesUsed;
         }
@@ -621,13 +630,13 @@ namespace Npgsql
         internal void CopyTo(NpgsqlBuffer other)
         {
             Contract.Assert(other.Size - other._filledBytes >= ReadBytesLeft);
-            Array.Copy(_buf, ReadPosition, other._buf, other._filledBytes, ReadBytesLeft);
+            Array.Copy(Data, ReadPosition, other.Data, other._filledBytes, ReadBytesLeft);
             other._filledBytes += ReadBytesLeft;
         }
 
         internal MemoryStream GetMemoryStream(int len)
         {
-            return new MemoryStream(_buf, ReadPosition, len, false, false);
+            return new MemoryStream(Data, ReadPosition, len, false, false);
         }
 
         internal void ResetTotalBytesFlushed()
@@ -661,15 +670,15 @@ namespace Npgsql
             int result;
             if (BitConverter.IsLittleEndian == (bo == ByteOrder.LSB))
             {
-                result = BitConverter.ToInt32(_buf, ReadPosition);
+                result = BitConverter.ToInt32(Data, ReadPosition);
                 ReadPosition += 4;
             }
             else
             {
-                _workspace[3] = _buf[ReadPosition++];
-                _workspace[2] = _buf[ReadPosition++];
-                _workspace[1] = _buf[ReadPosition++];
-                _workspace[0] = _buf[ReadPosition++];
+                _workspace[3] = Data[ReadPosition++];
+                _workspace[2] = Data[ReadPosition++];
+                _workspace[1] = Data[ReadPosition++];
+                _workspace[0] = Data[ReadPosition++];
                 result = BitConverter.ToInt32(_workspace, 0);
             }
             return result;
@@ -681,15 +690,15 @@ namespace Npgsql
             uint result;
             if (BitConverter.IsLittleEndian == (bo == ByteOrder.LSB))
             {
-                result = BitConverter.ToUInt32(_buf, ReadPosition);
+                result = BitConverter.ToUInt32(Data, ReadPosition);
                 ReadPosition += 4;
             }
             else
             {
-                _workspace[3] = _buf[ReadPosition++];
-                _workspace[2] = _buf[ReadPosition++];
-                _workspace[1] = _buf[ReadPosition++];
-                _workspace[0] = _buf[ReadPosition++];
+                _workspace[3] = Data[ReadPosition++];
+                _workspace[2] = Data[ReadPosition++];
+                _workspace[1] = Data[ReadPosition++];
+                _workspace[0] = Data[ReadPosition++];
                 result = BitConverter.ToUInt32(_workspace, 0);
             }
             return result;
@@ -701,20 +710,20 @@ namespace Npgsql
 
             if (BitConverter.IsLittleEndian == (ByteOrder.LSB == bo))
             {
-                var result = BitConverter.ToDouble(_buf, ReadPosition);
+                var result = BitConverter.ToDouble(Data, ReadPosition);
                 ReadPosition += 8;
                 return result;
             }
             else
             {
-                _workspace[7] = _buf[ReadPosition++];
-                _workspace[6] = _buf[ReadPosition++];
-                _workspace[5] = _buf[ReadPosition++];
-                _workspace[4] = _buf[ReadPosition++];
-                _workspace[3] = _buf[ReadPosition++];
-                _workspace[2] = _buf[ReadPosition++];
-                _workspace[1] = _buf[ReadPosition++];
-                _workspace[0] = _buf[ReadPosition++];
+                _workspace[7] = Data[ReadPosition++];
+                _workspace[6] = Data[ReadPosition++];
+                _workspace[5] = Data[ReadPosition++];
+                _workspace[4] = Data[ReadPosition++];
+                _workspace[3] = Data[ReadPosition++];
+                _workspace[2] = Data[ReadPosition++];
+                _workspace[1] = Data[ReadPosition++];
+                _workspace[0] = Data[ReadPosition++];
                 return BitConverter.ToDouble(_workspace, 0);
             }
         }

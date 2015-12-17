@@ -69,9 +69,8 @@ namespace Npgsql
         int? _timeout;
         readonly NpgsqlParameterCollection _parameters = new NpgsqlParameterCollection();
 
-        List<NpgsqlStatement> _queries;
-
-        int _queryIndex;
+        List<NpgsqlStatement> _statements;
+        bool _commandTextParsed;
 
         UpdateRowSource _updateRowSource = UpdateRowSource.Both;
 
@@ -87,6 +86,9 @@ namespace Npgsql
         /// closed since the command was prepared.
         /// </summary>
         int _prepareConnectionOpenId;
+
+        readonly List<MessageBundle> _messagePool = new List<MessageBundle>();
+        readonly Queue<FrontendMessage> _messageChain = new Queue<FrontendMessage>();
 
         static readonly NpgsqlLogger Log = NpgsqlLogManager.GetCurrentClassLogger();
 
@@ -145,7 +147,7 @@ namespace Npgsql
         {
             _commandText = cmdText;
             CommandType = CommandType.Text;
-            _queries = new List<NpgsqlStatement>();
+            _statements = new List<NpgsqlStatement>();
         }
 
         #endregion Constructors
@@ -168,6 +170,7 @@ namespace Npgsql
                 Contract.EndContractBlock();
 
                 _commandText = value;
+                _commandTextParsed = false;
                 DeallocatePrepared();
             }
         }
@@ -443,59 +446,43 @@ namespace Npgsql
             {
                 DeallocatePrepared();
                 ProcessRawQuery();
+                _commandTextParsed = true;
 
-                for (var i = 0; i < _queries.Count; i++)
+                EnsureMessagePoolCapacity(_statements.Count);
+                for (var i = 0; i < _statements.Count; i++)
                 {
-                    var query = _queries[i];
-                    ParseMessage parseMessage;
-                    DescribeMessage describeMessage;
-                    if (i == 0)
-                    {
-                        parseMessage = _connector.ParseMessage;
-                        describeMessage = _connector.DescribeMessage;
-                    }
-                    else
-                    {
-                        parseMessage = new ParseMessage();
-                        describeMessage = new DescribeMessage();
-                    }
+                    var query = _statements[i];
+                    var bundle = _messagePool[i];
 
                     query.PreparedStatementName = _connector.NextPreparedStatementName();
-                    _connector.AddMessage(parseMessage.Populate(query, _connector.TypeHandlerRegistry));
-                    _connector.AddMessage(describeMessage.Populate(StatementOrPortal.Statement,
-                        query.PreparedStatementName));
+                    _connector.AddMessage(bundle.ParseMessage.Populate(query, _connector.TypeHandlerRegistry));
+                    _connector.AddMessage(bundle.DescribeMessage.Populate(StatementOrPortal.Statement, query.PreparedStatementName));
                 }
 
                 _connector.AddMessage(SyncMessage.Instance);
                 _connector.SendAllMessages();
 
-                _queryIndex = 0;
-
-                while (true)
+                for (var i = 0; i < _statements.Count; i++)
                 {
+                    _connector.ReadExpecting<ParseCompleteMessage>();
+                    _connector.ReadExpecting<ParameterDescriptionMessage>();
                     var msg = _connector.ReadSingleMessage(DataRowLoadingMode.NonSequential);
                     switch (msg.Code)
                     {
-                    case BackendMessageCode.CompletedResponse: // prepended messages, e.g. begin transaction
-                    case BackendMessageCode.ParseComplete:
-                    case BackendMessageCode.ParameterDescription:
-                        continue;
                     case BackendMessageCode.RowDescription:
-                        var description = (RowDescriptionMessage) msg;
-                        FixupRowDescription(description, _queryIndex == 0);
-                        _queries[_queryIndex++].Description = description;
-                        continue;
+                        var description = (RowDescriptionMessage)msg;
+                        FixupRowDescription(description, i == 0);
+                        _statements[i].Description = description;
+                        break;
                     case BackendMessageCode.NoData:
-                        _queries[_queryIndex++].Description = null;
-                        continue;
-                    case BackendMessageCode.ReadyForQuery:
-                        Contract.Assume(_queryIndex == _queries.Count);
-                        IsPrepared = true;
-                        return;
+                        _statements[i].Description = null;
+                        break;
                     default:
-                        throw _connector.UnexpectedMessageReceived(msg.Code);
+                        throw new Exception($"Received unexpected backend message {msg.Code}. Please file a bug.");
                     }
                 }
+                _connector.ReadExpecting<ReadyForQueryMessage>();
+                IsPrepared = true;
             }
         }
 
@@ -503,7 +490,7 @@ namespace Npgsql
         {
             if (!IsPrepared) { return; }
 
-            foreach (var query in _queries) {
+            foreach (var query in _statements) {
                 _connector.PrependInternalMessage(new CloseMessage(StatementOrPortal.Statement, query.PreparedStatementName));
             }
             _connector.PrependInternalMessage(SyncMessage.Instance);
@@ -516,16 +503,16 @@ namespace Npgsql
 
         void ProcessRawQuery()
         {
-            _queries.Clear();
+            _statements.Clear();
             switch (CommandType) {
             case CommandType.Text:
-                SqlQueryParser.ParseRawQuery(CommandText, _connection == null || _connection.UseConformantStrings, _parameters, _queries);
-                if (_queries.Count > 1 && _parameters.Any(p => p.IsOutputDirection)) {
+                SqlQueryParser.ParseRawQuery(CommandText, _connection == null || _connection.UseConformantStrings, _parameters, _statements);
+                if (_statements.Count > 1 && _parameters.Any(p => p.IsOutputDirection)) {
                     throw new NotSupportedException("Commands with multiple queries cannot have out parameters");
                 }
                 break;
             case CommandType.TableDirect:
-                _queries.Add(new NpgsqlStatement("SELECT * FROM " + CommandText, new List<NpgsqlParameter>()));
+                _statements.Add(new NpgsqlStatement("SELECT * FROM " + CommandText, new List<NpgsqlParameter>()));
                 break;
             case CommandType.StoredProcedure:
                 var inputList = _parameters.Where(p => p.IsInputDirection).ToList();
@@ -566,7 +553,7 @@ namespace Npgsql
                     }
                 }
                 sb.Append(')');
-                _queries.Add(new NpgsqlStatement(sb.ToString(), inputList));
+                _statements.Add(new NpgsqlStatement(sb.ToString(), inputList));
                 break;
             default:
                 throw PGUtil.ThrowIfReached();
@@ -601,6 +588,15 @@ namespace Npgsql
             _connector.PrependBackendTimeoutMessage(CommandTimeout);
 
             // Create actual messages depending on scenario
+            if ((behavior & CommandBehavior.SchemaOnly) == 0)
+            {
+                CreateMessageChain(behavior);
+            }
+            else
+            {
+                CreateMessagesSchemaOnly(behavior);
+            }
+            /*
             if (IsPrepared) {
                 CreateMessagesPrepared(behavior);
             } else {
@@ -609,7 +605,45 @@ namespace Npgsql
                 } else {
                     CreateMessagesSchemaOnly(behavior);
                 }
+            }*/
+        }
+
+        void CreateMessageChain(CommandBehavior behavior)
+        {
+            Contract.Requires((behavior & CommandBehavior.SchemaOnly) == 0);
+
+            if (!_commandTextParsed) {
+                ProcessRawQuery();
             }
+            EnsureMessagePoolCapacity(_statements.Count);
+            for (var i = 0; i < _statements.Count; i++)
+            {
+                var statement = _statements[i];
+                var bundle = _messagePool[i];
+
+                if (!_isPrepared) {
+                    _messageChain.Enqueue(bundle.ParseMessage.Populate(statement, _connector.TypeHandlerRegistry));
+                }
+
+                var bindMessage = bundle.BindMessage;
+                bindMessage.Populate(statement.InputParameters, statement.PreparedStatementName);
+                if (AllResultTypesAreUnknown)
+                {
+                    bindMessage.AllResultTypesAreUnknown = AllResultTypesAreUnknown;
+                }
+                else if (i == 0 && UnknownResultTypeList != null)
+                {
+                    bindMessage.UnknownResultTypeList = UnknownResultTypeList;
+                }
+                _messageChain.Enqueue(bindMessage);
+
+                if (!_isPrepared) {
+                    _messageChain.Enqueue(bundle.DescribeMessage.Populate(StatementOrPortal.Portal));
+                }
+
+                _messageChain.Enqueue(bundle.ExecuteMessage.Populate("", (behavior & CommandBehavior.SingleRow) != 0 ? 1 : 0));
+            }
+            _messageChain.Enqueue(SyncMessage.Instance);
         }
 
         void CreateMessagesNonPrepared(CommandBehavior behavior)
@@ -617,85 +651,47 @@ namespace Npgsql
             Contract.Requires((behavior & CommandBehavior.SchemaOnly) == 0);
 
             ProcessRawQuery();
-
-            var portalNames = _queries.Count > 1
-                ? Enumerable.Range(0, _queries.Count).Select(i => "MQ" + i).ToArray()
-                : null;
-
-            for (var i = 0; i < _queries.Count; i++)
+            EnsureMessagePoolCapacity(_statements.Count);
+            for (var i = 0; i < _statements.Count; i++)
             {
-                var query = _queries[i];
+                var query = _statements[i];
+                var bundle = _messagePool[i];
 
-                ParseMessage parseMessage;
-                DescribeMessage describeMessage;
-                BindMessage bindMessage;
-                if (i == 0)
-                {
-                    parseMessage = _connector.ParseMessage;
-                    describeMessage = _connector.DescribeMessage;
-                    bindMessage = _connector.BindMessage;
-                }
-                else
-                {
-                    parseMessage = new ParseMessage();
-                    describeMessage = new DescribeMessage();
-                    bindMessage = new BindMessage();
-                }
+                _messageChain.Enqueue(bundle.ParseMessage.Populate(query, _connector.TypeHandlerRegistry));
 
-                _connector.AddMessage(parseMessage.Populate(query, _connector.TypeHandlerRegistry));
-                _connector.AddMessage(describeMessage.Populate(StatementOrPortal.Statement));
-
-                bindMessage.Populate(
-                    query.InputParameters,
-                    _queries.Count == 1 ? "" : portalNames[i]
-                );
+                var bindMessage = bundle.BindMessage;
+                bindMessage.Populate(query.InputParameters);
                 if (AllResultTypesAreUnknown) {
                     bindMessage.AllResultTypesAreUnknown = AllResultTypesAreUnknown;
                 } else if (i == 0 && UnknownResultTypeList != null) {
                     bindMessage.UnknownResultTypeList = UnknownResultTypeList;
                 }
-                _connector.AddMessage(bindMessage);
+                _messageChain.Enqueue(bindMessage);
+                _messageChain.Enqueue(bundle.DescribeMessage.Populate(StatementOrPortal.Portal));
+                _messageChain.Enqueue(bundle.ExecuteMessage.Populate("", (behavior & CommandBehavior.SingleRow) != 0 ? 1 : 0));
             }
-
-            if (_queries.Count == 1) {
-                _connector.AddMessage(_connector.ExecuteMessage.Populate("", (behavior & CommandBehavior.SingleRow) != 0 ? 1 : 0));
-            } else
-                for (var i = 0; i < _queries.Count; i++) {
-                    // TODO: Verify SingleRow behavior for multiqueries
-                    _connector.AddMessage(new ExecuteMessage(portalNames[i], (behavior & CommandBehavior.SingleRow) != 0 ? 1 : 0));
-                    _connector.AddMessage(new CloseMessage(StatementOrPortal.Portal, portalNames[i]));
-                }
-            _connector.AddMessage(SyncMessage.Instance);
+            _messageChain.Enqueue(SyncMessage.Instance);
         }
 
         void CreateMessagesPrepared(CommandBehavior behavior)
         {
-            for (var i = 0; i < _queries.Count; i++)
+            EnsureMessagePoolCapacity(_statements.Count);
+            for (var i = 0; i < _statements.Count; i++)
             {
-                BindMessage bindMessage;
-                ExecuteMessage executeMessage;
-                if (i == 0)
-                {
-                    bindMessage = _connector.BindMessage;
-                    executeMessage = _connector.ExecuteMessage;
-                }
-                else
-                {
-                    bindMessage = new BindMessage();
-                    executeMessage = new ExecuteMessage();
-                }
+                var query = _statements[i];
+                var bundle = _messagePool[i];
 
-                var query = _queries[i];
-                bindMessage.Populate(query.InputParameters, "", query.PreparedStatementName);
+                var bindMessage = bundle.BindMessage;
+                bindMessage.Populate(query.InputParameters, query.PreparedStatementName, "");
                 if (AllResultTypesAreUnknown) {
                     bindMessage.AllResultTypesAreUnknown = AllResultTypesAreUnknown;
                 } else if (i == 0 && UnknownResultTypeList != null) {
                     bindMessage.UnknownResultTypeList = UnknownResultTypeList;
                 }
-                _connector.AddMessage(bindMessage);
-                _connector.AddMessage(executeMessage.Populate("", (behavior & CommandBehavior.SingleRow) != 0 ? 1 : 0));
+                _messageChain.Enqueue(bindMessage);
+                _messageChain.Enqueue(bundle.ExecuteMessage.Populate("", (behavior & CommandBehavior.SingleRow) != 0 ? 1 : 0));
             }
-            _connector.AddMessage(SyncMessage.Instance);
+            _messageChain.Enqueue(SyncMessage.Instance);
         }
 
         void CreateMessagesSchemaOnly(CommandBehavior behavior)
@@ -704,20 +700,12 @@ namespace Npgsql
 
             ProcessRawQuery();
 
-            for (var i = 0; i < _queries.Count; i++)
+            EnsureMessagePoolCapacity(_statements.Count);
+            for (var i = 0; i < _statements.Count; i++)
             {
-                ParseMessage parseMessage;
-                DescribeMessage describeMessage;
-                if (i == 0) {
-                    parseMessage = _connector.ParseMessage;
-                    describeMessage = _connector.DescribeMessage;
-                } else {
-                    parseMessage = new ParseMessage();
-                    describeMessage = new DescribeMessage();
-                }
-
-                _connector.AddMessage(parseMessage.Populate(_queries[i], _connector.TypeHandlerRegistry));
-                _connector.AddMessage(describeMessage.Populate(StatementOrPortal.Statement));
+                var bundle = _messagePool[i];
+                _connector.AddMessage(bundle.ParseMessage.Populate(_statements[i], _connector.TypeHandlerRegistry));
+                _connector.AddMessage(bundle.DescribeMessage.Populate(StatementOrPortal.Statement));
             }
 
             _connector.AddMessage(SyncMessage.Instance);
@@ -734,72 +722,16 @@ namespace Npgsql
             State = CommandState.InProgress;
             try
             {
-                _queryIndex = 0;
                 _connector.SendAllMessages();
-
-                // We consume response messages, positioning ourselves before the response of the first
-                // Execute.
-                if (IsPrepared)
-                {
-                    if ((behavior & CommandBehavior.SchemaOnly) == 0)
-                    {
-                        // No binding in SchemaOnly mode
-                        var msg = _connector.ReadSingleMessage(DataRowLoadingMode.NonSequential);
-                        Contract.Assert(msg is BindCompleteMessage);
-                    }
-                }
-                else
-                {
-                    IBackendMessage msg;
-                    do
-                    {
-                        msg = _connector.ReadSingleMessage(DataRowLoadingMode.NonSequential);
-                        Contract.Assert(msg != null);
-                    } while (!ProcessMessageForUnprepared(msg, behavior));
-                }
-
-                var reader = new NpgsqlDataReader(this, behavior, _queries);
-                reader.Init();
+                var reader = new NpgsqlDataReader(this, behavior, _messageChain, _statements);
                 _connector.CurrentReader = reader;
+                reader.NextResult();
                 return reader;
             }
             catch
             {
                 State = CommandState.Idle;
                 throw;
-            }
-        }
-
-        bool ProcessMessageForUnprepared(IBackendMessage msg, CommandBehavior behavior)
-        {
-            Contract.Requires(!IsPrepared);
-
-            switch (msg.Code) {
-            case BackendMessageCode.CompletedResponse:  // e.g. begin transaction
-            case BackendMessageCode.ParseComplete:
-            case BackendMessageCode.ParameterDescription:
-                return false;
-            case BackendMessageCode.RowDescription:
-                Contract.Assert(_queryIndex < _queries.Count);
-                var description = (RowDescriptionMessage)msg;
-                FixupRowDescription(description, _queryIndex == 0);
-                _queries[_queryIndex].Description = description;
-                if ((behavior & CommandBehavior.SchemaOnly) != 0) {
-                    _queryIndex++;
-                }
-                return false;
-            case BackendMessageCode.NoData:
-                Contract.Assert(_queryIndex < _queries.Count);
-                _queries[_queryIndex].Description = null;
-                return false;
-            case BackendMessageCode.BindComplete:
-                Contract.Assume((behavior & CommandBehavior.SchemaOnly) == 0);
-                return ++_queryIndex == _queries.Count;
-            case BackendMessageCode.ReadyForQuery:
-                Contract.Assume((behavior & CommandBehavior.SchemaOnly) != 0);
-                return true;  // End of a SchemaOnly command
-            default:
-                throw _connector.UnexpectedMessageReceived(msg.Code);
             }
         }
 
@@ -1150,7 +1082,7 @@ namespace Npgsql
 
             var sb = new StringBuilder();
             sb.Append("Executing statement(s):");
-            foreach (var s in _queries)
+            foreach (var s in _statements)
             {
                 sb
                     .AppendLine()
@@ -1214,6 +1146,27 @@ namespace Npgsql
             if (Connection == null)
                 throw new InvalidOperationException("Connection property has not been initialized.");
             Connection.CheckReady();
+        }
+
+        void EnsureMessagePoolCapacity(int capacity)
+        {
+            while (_messagePool.Count < capacity)
+            {
+                _messagePool.Add(new MessageBundle {
+                    ParseMessage    = new ParseMessage(),
+                    DescribeMessage = new DescribeMessage(),
+                    BindMessage     = new BindMessage(),
+                    ExecuteMessage  = new ExecuteMessage()
+                });
+            }
+        }
+
+        struct MessageBundle
+        {
+            internal ParseMessage ParseMessage;
+            internal DescribeMessage DescribeMessage;
+            internal BindMessage BindMessage;
+            internal ExecuteMessage ExecuteMessage;
         }
 
         #endregion

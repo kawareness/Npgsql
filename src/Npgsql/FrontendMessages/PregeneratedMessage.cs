@@ -42,13 +42,12 @@ namespace Npgsql.FrontendMessages
         /// <summary>
         /// Constructs a new pregenerated message.
         /// </summary>
-        /// <param name="data">The data to be sent for this message, not including the 4-byte length.</param>
+        /// <param name="buf">A buffer prepopulated with the bytes for this pregenerated message.</param>
         /// <param name="description">Optional string form/description for debugging</param>
-        internal PregeneratedMessage(byte[] data, string description=null)
+        internal PregeneratedMessage(NpgsqlBuffer buf, string description=null)
         {
-            Contract.Requires(data.Length < NpgsqlBuffer.MinimumBufferSize);
-
-            _data = data;
+            _data = new byte[buf.WritePosition];
+            Array.Copy(buf.Data, _data, buf.WritePosition);
             _description = description;
         }
 
@@ -64,11 +63,11 @@ namespace Npgsql.FrontendMessages
             return _description ?? "[?]";
         }
 
-        static NpgsqlBuffer _tempBuf;
+        static readonly NpgsqlBuffer _tempBuf;
 
         static PregeneratedMessage()
         {
-            _tempBuf = new NpgsqlBuffer(new MemoryStream(), NpgsqlBuffer.MinimumBufferSize, Encoding.ASCII);
+            _tempBuf = new NpgsqlBuffer(NpgsqlBuffer.MinimumBufferSize, Encoding.ASCII);
 
             BeginTransRepeatableRead  = BuildQuery("BEGIN; SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
             BeginTransSerializable    = BuildQuery("BEGIN; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;");
@@ -97,13 +96,11 @@ namespace Npgsql.FrontendMessages
         {
             Contract.Requires(query != null && query.All(c => c < 128));
 
-            var totalLen = 5 + query.Length;
-            var ms = new MemoryStream(totalLen);
-            _tempBuf.Underlying = ms;
             var simpleQuery = new QueryMessage(query);
             simpleQuery.Write(_tempBuf);
-            _tempBuf.Flush();
-            return new PregeneratedMessage(ms.ToArray(), simpleQuery.ToString());
+            var msg = new PregeneratedMessage(_tempBuf, simpleQuery.ToString());
+            _tempBuf.Clear();
+            return msg;
         }
 
         internal static readonly PregeneratedMessage BeginTransRepeatableRead;

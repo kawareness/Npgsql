@@ -230,13 +230,6 @@ namespace Npgsql
 
         #region Reusable Message Objects
 
-        // Frontend. Note that these are only used for single-query commands.
-        internal readonly ParseMessage    ParseMessage    = new ParseMessage();
-        internal readonly BindMessage     BindMessage     = new BindMessage();
-        internal readonly DescribeMessage DescribeMessage = new DescribeMessage();
-        internal readonly ExecuteMessage  ExecuteMessage  = new ExecuteMessage();
-
-        // Backend
         readonly CommandCompleteMessage      _commandCompleteMessage      = new CommandCompleteMessage();
         readonly ReadyForQueryMessage        _readyForQueryMessage        = new ReadyForQueryMessage();
         readonly ParameterDescriptionMessage _parameterDescriptionMessage = new ParameterDescriptionMessage();
@@ -398,7 +391,7 @@ namespace Npgsql
                 RawOpen(timeout);
 
                 WriteStartupMessage();
-                Buffer.Flush();
+                Buffer.Send();
                 timeout.Check();
 
                 HandleAuthentication(timeout);
@@ -465,13 +458,13 @@ namespace Npgsql
                 Contract.Assert(_socket != null);
                 _baseStream = new NetworkStream(_socket, true);
                 _stream = _baseStream;
-                Buffer = new NpgsqlBuffer(_stream, BufferSize, PGUtil.UTF8Encoding);
+                Buffer = new NpgsqlBuffer(_socket, _stream, BufferSize, PGUtil.UTF8Encoding);
 
                 if (SslMode == SslMode.Require || SslMode == SslMode.Prefer)
                 {
                     Log.Trace("Attempting SSL negotiation");
                     SSLRequestMessage.Instance.Write(Buffer);
-                    Buffer.Flush();
+                    Buffer.Send();
 
                     Buffer.Ensure(1);
                     var response = (char)Buffer.ReadByte();
@@ -730,7 +723,7 @@ namespace Npgsql
                     if (passwordMessage != null)
                     {
                         passwordMessage.Write(Buffer);
-                        Buffer.Flush();
+                        Buffer.Send();
                         timeout.Check();
                     }
 
@@ -896,7 +889,7 @@ namespace Npgsql
                 {
                     SendMessage(msg);
                 }
-                Buffer.Flush();
+                Buffer.Send();
             }
             catch
             {
@@ -931,7 +924,7 @@ namespace Npgsql
             {
                 if (asSimple.Length > Buffer.WriteSpaceLeft)
                 {
-                    Buffer.Flush();
+                    Buffer.Send();
                 }
                 Contract.Assume(Buffer.WriteSpaceLeft >= asSimple.Length);
                 asSimple.Write(Buffer);
@@ -944,7 +937,7 @@ namespace Npgsql
                 var directBuf = new DirectBuffer();
                 while (!asComplex.Write(Buffer, ref directBuf))
                 {
-                    Buffer.Flush();
+                    Buffer.Send();
 
                     // The following is an optimization hack for writing large byte arrays without passing
                     // through our buffer
@@ -1310,8 +1303,7 @@ namespace Npgsql
             if (asExpected == null)
             {
                 Break();
-                throw new Exception(
-                    $"Received backend message {msg.Code} while expecting {typeof (T).Name}. Please file a bug.");
+                throw new Exception($"Received backend message {msg.Code} while expecting {typeof (T).Name}. Please file a bug.");
             }
             return asExpected;
         }
@@ -1461,10 +1453,10 @@ namespace Npgsql
 
                 // Now wait for the server to close the connection, better chance of the cancellation
                 // actually being delivered.
-                var count = _stream.Read(Buffer._buf, 0, 1);
+                var count = _stream.Read(Buffer.Data, 0, 1);
                 if (count != -1)
                 {
-                    Log.Error("Received response after sending cancel request, shouldn't happen! First byte: " + Buffer._buf[0]);
+                    Log.Error("Received response after sending cancel request, shouldn't happen! First byte: " + Buffer.Data[0]);
                 }
             }
             finally
