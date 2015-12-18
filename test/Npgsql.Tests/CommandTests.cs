@@ -57,66 +57,94 @@ namespace Npgsql.Tests
         [TestCase(new[] { false, false }, TestName = "TwoNonQueries")]
         [TestCase(new[] { false, true }, TestName = "NonQueryQuery")]
         [TestCase(new[] { true, false }, TestName = "QueryNonQuery")]
-        public void Multiqueries(bool[] queries)
+        public void MultipleStatements(bool[] queries)
         {
             ExecuteNonQuery("CREATE TEMP TABLE data (name TEXT)");
             var sb = new StringBuilder();
             foreach (var query in queries)
                 sb.Append(query ? "SELECT 1;" : "UPDATE data SET name='yo' WHERE 1=0;");
             var sql = sb.ToString();
-            foreach (var prepare in new[] { false, true }) {
-                var cmd = new NpgsqlCommand(sql, Conn);
-                if (prepare)
-                    cmd.Prepare();
-                var reader = cmd.ExecuteReader();
-                var numResultSets = queries.Count(q => q);
-                for (var i = 0; i < numResultSets; i++) {
-                    Assert.That(reader.Read(), Is.True);
-                    Assert.That(reader[0], Is.EqualTo(1));
-                    Assert.That(reader.NextResult(), Is.EqualTo(i != numResultSets - 1));
+            foreach (var prepare in new[] { false, true })
+            {
+                using (var cmd = new NpgsqlCommand(sql, Conn))
+                {
+                    if (prepare)
+                        cmd.Prepare();
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        var numResultSets = queries.Count(q => q);
+                        for (var i = 0; i < numResultSets; i++)
+                        {
+                            Assert.That(reader.Read(), Is.True);
+                            Assert.That(reader[0], Is.EqualTo(1));
+                            Assert.That(reader.NextResult(), Is.EqualTo(i != numResultSets - 1));
+                        }
+                    }
                 }
-                reader.Close();
-                cmd.Dispose();
             }
         }
 
         [Test]
-        public void MultipleQueriesWithParameters([Values(PrepareOrNot.NotPrepared, PrepareOrNot.Prepared)] PrepareOrNot prepare)
+        public void MultipleStatementsWithParameters([Values(PrepareOrNot.NotPrepared, PrepareOrNot.Prepared)] PrepareOrNot prepare)
         {
-            var cmd = new NpgsqlCommand("SELECT @p1; SELECT @p2", Conn);
-            var p1 = new NpgsqlParameter("p1", NpgsqlDbType.Integer);
-            var p2 = new NpgsqlParameter("p2", NpgsqlDbType.Text);
-            cmd.Parameters.Add(p1);
-            cmd.Parameters.Add(p2);
-            if (prepare == PrepareOrNot.Prepared) {
-                cmd.Prepare();
+            using (var cmd = new NpgsqlCommand("SELECT @p1; SELECT @p2", Conn))
+            {
+                var p1 = new NpgsqlParameter("p1", NpgsqlDbType.Integer);
+                var p2 = new NpgsqlParameter("p2", NpgsqlDbType.Text);
+                cmd.Parameters.Add(p1);
+                cmd.Parameters.Add(p2);
+                if (prepare == PrepareOrNot.Prepared)
+                    cmd.Prepare();
+                p1.Value = 8;
+                p2.Value = "foo";
+                using (var reader = cmd.ExecuteReader())
+                {
+                    Assert.That(reader.Read(), Is.True);
+                    Assert.That(reader.GetInt32(0), Is.EqualTo(8));
+                    Assert.That(reader.NextResult(), Is.True);
+                    Assert.That(reader.Read(), Is.True);
+                    Assert.That(reader.GetString(0), Is.EqualTo("foo"));
+                    Assert.That(reader.NextResult(), Is.False);
+                }
             }
-            p1.Value = 8;
-            p2.Value = "foo";
-            var reader = cmd.ExecuteReader();
-            Assert.That(reader.Read(), Is.True);
-            Assert.That(reader.GetInt32(0), Is.EqualTo(8));
-            Assert.That(reader.NextResult(), Is.True);
-            Assert.That(reader.Read(), Is.True);
-            Assert.That(reader.GetString(0), Is.EqualTo("foo"));
-            Assert.That(reader.NextResult(), Is.False);
-            reader.Close();
-            cmd.Dispose();
         }
 
         [Test]
-        public void MultipleQueriesSingleRow([Values(PrepareOrNot.NotPrepared, PrepareOrNot.Prepared)] PrepareOrNot prepare)
+        public void MultipleStatementsSingleRow([Values(PrepareOrNot.NotPrepared, PrepareOrNot.Prepared)] PrepareOrNot prepare)
         {
-            var cmd = new NpgsqlCommand("SELECT 1; SELECT 2", Conn);
-            if (prepare == PrepareOrNot.Prepared)
-                cmd.Prepare();
-            var reader = cmd.ExecuteReader(CommandBehavior.SingleRow);
-            Assert.That(reader.Read(), Is.True);
-            Assert.That(reader.GetInt32(0), Is.EqualTo(1));
-            Assert.That(reader.Read(), Is.False);
-            Assert.That(reader.NextResult(), Is.False);
-            reader.Close();
-            cmd.Dispose();
+            using (var cmd = new NpgsqlCommand("SELECT 1; SELECT 2", Conn))
+            {
+                if (prepare == PrepareOrNot.Prepared)
+                    cmd.Prepare();
+                using (var reader = cmd.ExecuteReader(CommandBehavior.SingleRow))
+                {
+                    Assert.That(reader.Read(), Is.True);
+                    Assert.That(reader.GetInt32(0), Is.EqualTo(1));
+                    Assert.That(reader.Read(), Is.False);
+                    Assert.That(reader.NextResult(), Is.False);
+                }
+            }
+        }
+
+        [Test, IssueLink("https://github.com/npgsql/npgsql/issues/641")]
+        public void MultipleStatementsWithDependency()
+        {
+            Assert.That(ExecuteScalar("CREATE TEMP TABLE foo (a int); SELECT COUNT(*) FROM foo"), Is.EqualTo(0), "DDL + DML");
+            Assert.That(ExecuteScalar("INSERT INTO foo (a) VALUES (8); SELECT COUNT(*) FROM foo"), Is.EqualTo(1), "DML + DML");
+        }
+
+        [Test, IssueLink("https://github.com/npgsql/npgsql/issues/641")]
+        [Timeout(10000)]
+        public void MultipleStatementsNoDeadlock()
+        {
+            var outgoingData = new byte[1024 * 1024];
+            var incomingData = new byte[1024 * 1024];
+            using (var cmd = new NpgsqlCommand("SELECT @incoming; SELECT @outgoing", Conn))
+            {
+                cmd.Parameters.AddWithValue("incoming", incomingData);
+                cmd.Parameters.AddWithValue("outgoing", outgoingData);
+                cmd.ExecuteNonQuery();
+            }
         }
 
         #endregion
