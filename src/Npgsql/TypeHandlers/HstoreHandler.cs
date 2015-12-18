@@ -114,7 +114,7 @@ namespace Npgsql.TypeHandlers
             switch (_state)
             {
                 case State.Count:
-                    if (_writeBuf.WriteSpaceLeft < 4) { return false; }
+                    if (_writeBuf.SpaceLeft < 4) { return false; }
                     _writeBuf.WriteInt32(_value.Count);
                     if (_value.Count == 0)
                     {
@@ -127,7 +127,7 @@ namespace Npgsql.TypeHandlers
 
                 case State.KeyLen:
                     _state = State.KeyLen;
-                    if (_writeBuf.WriteSpaceLeft < 4) { return false; }
+                    if (_writeBuf.SpaceLeft < 4) { return false; }
                     var keyLen = _lengthCache.Get();
                     _writeBuf.WriteInt32(keyLen);
                     _textHandler.PrepareWrite(_enumerator.Current.Key, _writeBuf, _lengthCache, _parameter);
@@ -140,7 +140,7 @@ namespace Npgsql.TypeHandlers
 
                 case State.ValueLen:
                     _state = State.ValueLen;
-                    if (_writeBuf.WriteSpaceLeft < 4) { return false; }
+                    if (_writeBuf.SpaceLeft < 4) { return false; }
                     if (_enumerator.Current.Value == null)
                     {
                         _writeBuf.WriteInt32(-1);

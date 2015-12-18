@@ -117,7 +117,7 @@ namespace Npgsql.TypeHandlers.GeometricHandlers
         {
             if (_index == -1)
             {
-                if (_writeBuf.WriteSpaceLeft < 5) { return false; }
+                if (_writeBuf.SpaceLeft < 5) { return false; }
                 _writeBuf.WriteByte((byte)(_value.Open ? 0 : 1));
                 _writeBuf.WriteInt32(_value.Count);
                 _index = 0;
@@ -125,7 +125,7 @@ namespace Npgsql.TypeHandlers.GeometricHandlers
 
             for (; _index < _value.Count; _index++)
             {
-                if (_writeBuf.WriteSpaceLeft < 16) { return false; }
+                if (_writeBuf.SpaceLeft < 16) { return false; }
                 var p = _value[_index];
                 _writeBuf.WriteDouble(p.X);
                 _writeBuf.WriteDouble(p.Y);

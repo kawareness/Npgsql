@@ -121,7 +121,7 @@ namespace Npgsql.TypeHandlers.FullTextSearchHandlers
         {
             if (_lexemePos == -1)
             {
-                if (_writeBuf.WriteSpaceLeft < 4)
+                if (_writeBuf.SpaceLeft < 4)
                     return false;
                 _writeBuf.WriteInt32(_value.Count);
                 _lexemePos = 0;
@@ -129,7 +129,7 @@ namespace Npgsql.TypeHandlers.FullTextSearchHandlers
 
             for (; _lexemePos < _value.Count; _lexemePos++)
             {
-                if (_writeBuf.WriteSpaceLeft < MaxSingleLexemeBytes)
+                if (_writeBuf.SpaceLeft < MaxSingleLexemeBytes)
                     return false;
 
                 _writeBuf.WriteString(_value[_lexemePos].Text);

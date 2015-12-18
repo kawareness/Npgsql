@@ -29,6 +29,7 @@ using System.Data.Common;
 using System.Diagnostics.Contracts;
 using System.IO;
 using System.Linq;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -68,15 +69,26 @@ namespace Npgsql
         readonly List<NpgsqlStatement> _statements;
 
         /// <summary>
+        /// The number of statements that have been fully written to the buffer, but not necessarily sent to the database.
+        /// </summary>
+        int _statementsWritten;
+
+        /// <summary>
+        /// The number of statements that have been fully sent to the database.
+        /// </summary>
+        int _statementsSent;
+
+        /// <summary>
         /// The number of statements that have been fully processed by the user.
         /// Equal to the number of times <see cref="NextResult"/> has been called.
         /// </summary>
         int _statementsConsumed;
 
         /// <summary>
-        /// The number of statements that have been fully sent to the database.
+        /// If a direct buffer could only be partially sent in non-blocking mode, it is stored here for completion on
+        /// the next send.
         /// </summary>
-        int _statementsSent;
+        DirectBuffer _directBuf;
 
         /// <summary>
         /// The RowDescription message for the current resultset being processed
@@ -437,21 +449,35 @@ namespace Npgsql
                 // Send more messages if needed and process the results until we get to a new resultset
                 while (true)
                 {
-                    SendMoreStatements();
+                    if (_statementsConsumed == _statements.Count)
+                    {
+                        // There are no more queries, we're done. Read to the RFQ.
+                        ProcessMessage(SkipUntil(BackendMessageCode.ReadyForQuery));
+                        _rowDescription = null;
+                        return false;
+                    }
+
+                    // Attempt to send any messages we haven't yet sent, as many as possible
+                    if (_statementsSent < _statements.Count) {
+                        SendMoreStatements();
+                    }
                     Contract.Assert(_statementsConsumed < _statementsSent);
 
                     while (_statementsConsumed < _statementsSent)
                     {
                         // TODO: Error handling, e.g. bad SQL!
                         var statement = _statements[_statementsConsumed];
-                        if (!IsPrepared) {
-                            ReadExpecting<ParseCompleteMessage>();
-                        }
-
-                        ReadExpecting<BindCompleteMessage>();
-
-                        if (!IsPrepared)
+                        if (IsPrepared)
                         {
+                            // For prepared statements, the Parse and Describe have been sent in the prepare phase and
+                            // the row descriptions are already present on the statements.
+                            ReadExpecting<BindCompleteMessage>();
+                        }
+                        else
+                        {
+                            ReadExpecting<ParseCompleteMessage>();
+                            ReadExpecting<BindCompleteMessage>();
+
                             var msg = ReadMessage();
                             switch (msg.Code)
                             {
@@ -466,7 +492,7 @@ namespace Npgsql
                             }
                         }
 
-                        if (_statements[_statementsConsumed].Description == null)
+                        if (statement.Description == null)
                         {
                             // No resultset (e.g. INSERT), consume the CommandComplete and continue to the next statements
                             var msg = ReadMessage();
@@ -484,15 +510,7 @@ namespace Npgsql
                         return true;
                     }
 
-                    // User has consumed result sets for all sent statements
-
-                    if (_statementsSent == _statements.Count)
-                    {
-                        // There are no more queries, we're done. Read to the RFQ.
-                        ProcessMessage(SkipUntil(BackendMessageCode.ReadyForQuery));
-                        _rowDescription = null;
-                        return false;
-                    }
+                    // User has consumed result sets for all sent statements, reiterate
                 }
                 /*
                 if ((_behavior & CommandBehavior.SingleResult) != 0)
@@ -518,13 +536,54 @@ namespace Npgsql
             var blocking = true;
             try
             {
+                if (_statementsConsumed < _statementsSent)
+                {
+                    // There are still statements that we've sent without consuming their results - switch to non-blocking.
+                    buf.Socket.Blocking = false;
+                    blocking = false;
+                }
+
+                if (buf.LeftToSend > 0)
+                {
+                    // There's some data leftover in the buffer from a previous non-blocking send that did not fully complete.
+                    // Attempt to complete it now
+                    if (!buf.Send()) { return; }
+                    _statementsSent = _statementsWritten;
+                }
+
+                if (_directBuf.Buffer != null)
+                {
+                    // There's some data leftover in the direct buffer from a previous non-blocking send that did not fully complete.
+                    // Attempt to complete it now
+                    var sent = buf.Socket.Send(_directBuf.Buffer, _directBuf.Offset, _directBuf.Size, SocketFlags.None);
+                    if (sent < _directBuf.Size)
+                    {
+                        // The direct buffer could only be partially sent in non-blocking mode.
+                        // Make arrangements to continue writing in the next send
+                        _directBuf.Offset += sent;
+                        _directBuf.Size -= sent;
+                        return;
+                    }
+                    _directBuf.Buffer = null;
+                }
+
                 while (true)
                 {
                     if (!_messageChain.Any())
                     {
                         // Finished sending everything
-                        buf.Send();
+                        if (!buf.Send()) { return; }
+                        _statementsSent = _statementsWritten;
                         return;
+                    }
+
+                    if (_statementsConsumed < _statementsSent && blocking)
+                    {
+                        // There are still statements that we've sent without consuming their results - switch to non-blocking.
+                        // If a send would block, stop and transfer control back to the user - the server may be blocking on us
+                        // to consume its results.
+                        buf.Socket.Blocking = false;
+                        blocking = false;
                     }
 
                     var msg = _messageChain.Peek();
@@ -534,11 +593,12 @@ namespace Npgsql
                     var asSimple = msg as SimpleFrontendMessage;
                     if (asSimple != null)
                     {
-                        if (asSimple.Length > buf.WriteSpaceLeft)
+                        if (asSimple.Length > buf.SpaceLeft)
                         {
-                            buf.Send();
+                            if (!buf.Send()) { return; }
+                            _statementsSent = _statementsWritten;
                         }
-                        Contract.Assume(buf.WriteSpaceLeft >= asSimple.Length);
+                        Contract.Assume(buf.SpaceLeft >= asSimple.Length);
                         asSimple.Write(buf);
                     }
                     else
@@ -546,49 +606,44 @@ namespace Npgsql
                         var asComplex = msg as ChunkingFrontendMessage;
                         if (asComplex != null)
                         {
-                            var directBuf = new DirectBuffer();
-                            while (!asComplex.Write(buf, ref directBuf))
+                            while (!asComplex.Write(buf, ref _directBuf))
                             {
-                                buf.Send();
+                                if (!buf.Send()) { return; }
+                                _statementsSent = _statementsWritten;
 
                                 // The following is an optimization hack for writing large byte arrays without passing
                                 // through our buffer
-                                if (directBuf.Buffer != null)
+                                if (_directBuf.Buffer != null)
                                 {
-                                    throw new NotImplementedException();
-                                    /*
-                                buf.Underlying.Write(directBuf.Buffer, directBuf.Offset,
-                                    directBuf.Size == 0 ? directBuf.Buffer.Length : directBuf.Size);
-                                directBuf.Buffer = null;
-                                directBuf.Size = 0;
-                                */
+                                    Contract.Assert(_directBuf.Size > 0);
+                                    var sent = buf.Socket.Send(_directBuf.Buffer, _directBuf.Offset, _directBuf.Size, SocketFlags.None);
+                                    if (sent < _directBuf.Size)
+                                    {
+                                        // The direct buffer could only be partially sent in non-blocking mode.
+                                        // Make arrangements to continue writing in the next send
+                                        _directBuf.Offset += sent;
+                                        _directBuf.Size -= sent;
+                                        return;
+                                    }
+                                    _directBuf.Buffer = null;
                                 }
                             }
                         }
                         else throw PGUtil.ThrowIfReached();
                     }
 
-                    // Message has been fully sent, remove it from the chain
+                    // Message has been fully written, remove it from the chain
                     _messageChain.Dequeue();
 
-                    if (msg is ExecuteMessage)
-                    {
-                        _statementsSent++;
-                        if (_messageChain.Any())
-                        {
-                            // There are still messages left to send.
-                            // Put the socket in non-blocking mode and attempt to send whatever we can. If a send would block,
-                            // stop and transfer control back to the user - the server may be waiting for us to consume its results.
-                            buf.Socket.Blocking = false;
-                            blocking = false;
-                        }
+                    if (msg is ExecuteMessage) {
+                        _statementsWritten++;
                     }
                 }
             }
             finally
             {
                 // We may have set the socket to nonblocking mode during writing, when leaving this method we must be
-                // blocking again for reads.v
+                // blocking again for reads.
                 if (!blocking)
                 {
                     buf.Socket.Blocking = true;

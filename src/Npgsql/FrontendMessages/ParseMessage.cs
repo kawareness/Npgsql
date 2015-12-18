@@ -82,7 +82,7 @@ namespace Npgsql.FrontendMessages
                 case State.WroteNothing:
                     _statementNameBytes = PGUtil.UTF8Encoding.GetBytes(Statement);
                     _queryLen = PGUtil.UTF8Encoding.GetByteCount(Query);
-                    if (buf.WriteSpaceLeft < 1 + 4 + _statementNameBytes.Length + 1) {
+                    if (buf.SpaceLeft < 1 + 4 + _statementNameBytes.Length + 1) {
                         return false;
                     }
 
@@ -104,7 +104,7 @@ namespace Npgsql.FrontendMessages
                 case State.WroteHeader:
                     _state = State.WroteHeader;
 
-                    if (_queryLen <= buf.WriteSpaceLeft) {
+                    if (_queryLen <= buf.SpaceLeft) {
                         buf.WriteString(Query);
                         goto case State.WroteQuery;
                     }
@@ -134,7 +134,7 @@ namespace Npgsql.FrontendMessages
 
                 case State.WroteQuery:
                     _state = State.WroteQuery;
-                    if (buf.WriteSpaceLeft < 1 + 2) {
+                    if (buf.SpaceLeft < 1 + 2) {
                         return false;
                     }
                     buf.WriteByte(0); // Null terminator for the query
@@ -145,7 +145,7 @@ namespace Npgsql.FrontendMessages
                     _state = State.WritingParameterTypes;
                     for (; _parameterTypePos < ParameterTypeOIDs.Count; _parameterTypePos++)
                     {
-                        if (buf.WriteSpaceLeft < 4)
+                        if (buf.SpaceLeft < 4)
                         {
                             return false;
                         }

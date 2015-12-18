@@ -128,7 +128,7 @@ namespace Npgsql
                 throw new InvalidOperationException("Row has already been started and must be finished");
             }
 
-            if (_buf.WriteSpaceLeft < 2) { FlushAndStartDataMessage(); }
+            if (_buf.SpaceLeft < 2) { FlushAndStartDataMessage(); }
             _buf.WriteInt16(NumColumns);
 
             _column = 0;
@@ -180,7 +180,7 @@ namespace Npgsql
         {
             try
             {
-                if (_buf.WriteSpaceLeft < 4)
+                if (_buf.SpaceLeft < 4)
                 {
                     FlushAndStartDataMessage();
                 }
@@ -200,7 +200,7 @@ namespace Npgsql
                 {
                     var len = asSimple.ValidateAndGetLength(asObject, _dummyParam);
                     _buf.WriteInt32(len);
-                    if (_buf.WriteSpaceLeft < len)
+                    if (_buf.SpaceLeft < len)
                     {
                         Contract.Assume(_buf.Size >= len);
                         FlushAndStartDataMessage();
@@ -235,7 +235,7 @@ namespace Npgsql
                         // through our buffer
                         if (directBuf.Buffer != null)
                         {
-                            len = directBuf.Size == 0 ? directBuf.Buffer.Length : directBuf.Size;
+                            len = directBuf.Size;
                             _buf.End = 1;
                             _buf.WriteInt32(len + 4);
                             _buf.Send();
@@ -273,7 +273,7 @@ namespace Npgsql
                 throw new InvalidOperationException("A row hasn't been started");
             }
 
-            if (_buf.WriteSpaceLeft < 4) { FlushAndStartDataMessage(); }
+            if (_buf.SpaceLeft < 4) { FlushAndStartDataMessage(); }
 
             _buf.WriteInt32(-1);
             _column++;
@@ -387,7 +387,7 @@ namespace Npgsql
 
         void WriteTrailer()
         {
-            if (_buf.WriteSpaceLeft < 2) { FlushAndStartDataMessage(); }
+            if (_buf.SpaceLeft < 2) { FlushAndStartDataMessage(); }
             _buf.WriteInt16(-1);
             Flush();
         }

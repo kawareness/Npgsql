@@ -210,12 +210,12 @@ namespace Npgsql.TypeHandlers
             if (_pos < 0)
             {
                 // Initial bitlength byte
-                if (_writeBuf.WriteSpaceLeft < 4) { return false; }
+                if (_writeBuf.SpaceLeft < 4) { return false; }
                 _writeBuf.WriteInt32(bitArray.Length);
                 _pos = 0;
             }
             var byteLen = (bitArray.Length + 7) / 8;
-            var endPos = _pos + Math.Min(byteLen - _pos, _writeBuf.WriteSpaceLeft);
+            var endPos = _pos + Math.Min(byteLen - _pos, _writeBuf.SpaceLeft);
             for (; _pos < endPos; _pos++) {
                 var bitPos = _pos * 8;
                 var b = 0;
@@ -233,7 +233,7 @@ namespace Npgsql.TypeHandlers
 
         bool WriteBool(bool b)
         {
-            if (_writeBuf.WriteSpaceLeft < 5)
+            if (_writeBuf.SpaceLeft < 5)
                 return false;
             _writeBuf.WriteInt32(1);
             _writeBuf.WriteByte(b ? (byte)0x80 : (byte)0);
@@ -247,14 +247,14 @@ namespace Npgsql.TypeHandlers
             if (_pos < 0)
             {
                 // Initial bitlength byte
-                if (_writeBuf.WriteSpaceLeft < 4) { return false; }
+                if (_writeBuf.SpaceLeft < 4) { return false; }
                 _writeBuf.WriteInt32(str.Length);
                 _pos = 0;
             }
 
             var byteLen = (str.Length + 7) / 8;
             var bytePos = (_pos + 7) / 8;
-            var endBytePos = bytePos + Math.Min(byteLen - bytePos - 1, _writeBuf.WriteSpaceLeft);
+            var endBytePos = bytePos + Math.Min(byteLen - bytePos - 1, _writeBuf.SpaceLeft);
 
             for (; bytePos < endBytePos; bytePos++)
             {

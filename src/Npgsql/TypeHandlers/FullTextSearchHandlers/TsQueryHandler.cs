@@ -218,7 +218,7 @@ namespace Npgsql.TypeHandlers.FullTextSearchHandlers
         {
             if (_stack == null)
             {
-                if (_writeBuf.WriteSpaceLeft < 4)
+                if (_writeBuf.SpaceLeft < 4)
                     return false;
                 _writeBuf.WriteInt32(_numTokens);
 
@@ -234,10 +234,10 @@ namespace Npgsql.TypeHandlers.FullTextSearchHandlers
 
             while (_stack.Count > 0)
             {
-                if (_writeBuf.WriteSpaceLeft < 2)
+                if (_writeBuf.SpaceLeft < 2)
                     return false;
 
-                if (_stack.Peek().Kind == NpgsqlTsQuery.NodeKind.Lexeme && _writeBuf.WriteSpaceLeft < MaxSingleTokenBytes)
+                if (_stack.Peek().Kind == NpgsqlTsQuery.NodeKind.Lexeme && _writeBuf.SpaceLeft < MaxSingleTokenBytes)
                     return false;
 
                 var node = _stack.Pop();

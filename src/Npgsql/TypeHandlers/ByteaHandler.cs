@@ -154,7 +154,7 @@ namespace Npgsql.TypeHandlers
 
             // If the entire array fits in our buffer, copy it as usual.
             // Otherwise, switch to direct write from the user-provided buffer
-            if (_value.Count <= _writeBuf.WriteSpaceLeft)
+            if (_value.Count <= _writeBuf.SpaceLeft)
             {
                 _writeBuf.WriteBytes(_value.Array, _value.Offset, _value.Count);
                 return true;

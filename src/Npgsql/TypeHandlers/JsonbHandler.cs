@@ -87,7 +87,7 @@ namespace Npgsql.TypeHandlers
         {
             if (!_handledVersion)
             {
-                if (_writeBuf.WriteSpaceLeft < 1) { return false; }
+                if (_writeBuf.SpaceLeft < 1) { return false; }
                 _writeBuf.WriteByte(JsonbProtocolVersion);
                 _handledVersion = true;
             }

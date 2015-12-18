@@ -111,7 +111,7 @@ namespace Npgsql
 
             EnsureDataMessage();
 
-            if (count <= _writeBuf.WriteSpaceLeft)
+            if (count <= _writeBuf.SpaceLeft)
             {
                 _writeBuf.WriteBytes(buffer, offset, count);
                 return;

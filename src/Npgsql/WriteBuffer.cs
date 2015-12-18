@@ -61,20 +61,31 @@ namespace Npgsql
         int _usableSize;
         internal Encoding TextEncoding { get; }
 
-        internal int End { get { return _end; } set { _end = value; } }
-        internal int WriteSpaceLeft => Size - _end;
+        /// <summary>
+        /// The position in the buffer from which there is user data that needs to be sent.
+        /// Is always zero except if a non-blocking write completed partially.
+        /// </summary>
+        internal int Start { get; set; }
 
-        internal long TotalBytesWritten { get; private set; }
+        /// <summary>
+        /// The buffer has been filled with user data up to this position.
+        /// </summary>
+        internal int End { get; set; }
+
+        /// <summary>
+        /// How many bytes are in the buffer, waiting to be sent
+        /// </summary>
+        internal int LeftToSend => End - Start;
+
+        /// <summary>
+        /// How many bytes are available in the buffer to write additional data.
+        /// </summary>
+        internal int SpaceLeft => Size - End;
 
         internal byte[] Data { get; }
         readonly Encoder _textEncoder;
 
-        int _end;
-
-        /// <summary>
-        /// Used for internal temporary purposes
-        /// </summary>
-        readonly char[] _tempCharBuf;
+        internal long TotalBytesWritten { get; private set; }
 
         BitConverterUnion _bitConverterUnion;
 
@@ -107,25 +118,34 @@ namespace Npgsql
             Data = new byte[Size];
             TextEncoding = textEncoding;
             _textEncoder = TextEncoding.GetEncoder();
-            _tempCharBuf = new char[1024];
         }
 
         #endregion
 
         #region I/O
 
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <returns>If the socket is non-blocking, whether the entire buffer was written or not.</returns>
         [RewriteAsync]
-        internal void Send()
+        internal bool Send()
         {
-            if (_end != 0)
+            if (End == 0)
             {
-                var count = Socket.Send(Data, 0, _end, SocketFlags.None);
-                TotalBytesWritten += count;
-                if (count == _end)
-                {
-                    _end = 0;
-                }
+                return true;
             }
+
+            var count = LeftToSend;
+            var sent = Socket.Send(Data, Start, count, SocketFlags.None);
+            TotalBytesWritten += sent;
+            if (sent == count)
+            {
+                Clear();
+                return true;
+            }
+            Start += count;
+            return false;
         }
 
         #endregion
@@ -134,43 +154,43 @@ namespace Npgsql
 
         public void WriteByte(byte b)
         {
-            Contract.Requires(WriteSpaceLeft >= sizeof(byte));
-            Data[_end++] = b;
+            Contract.Requires(SpaceLeft >= sizeof(byte));
+            Data[End++] = b;
         }
 
         public void WriteInt16(int i)
         {
-            Contract.Requires(WriteSpaceLeft >= sizeof(short));
-            Data[_end++] = (byte)(i >> 8);
-            Data[_end++] = (byte)i;
+            Contract.Requires(SpaceLeft >= sizeof(short));
+            Data[End++] = (byte)(i >> 8);
+            Data[End++] = (byte)i;
         }
 
         public void WriteInt32(int i)
         {
-            Contract.Requires(WriteSpaceLeft >= sizeof(int));
-            var pos = _end;
+            Contract.Requires(SpaceLeft >= sizeof(int));
+            var pos = End;
             Data[pos++] = (byte)(i >> 24);
             Data[pos++] = (byte)(i >> 16);
             Data[pos++] = (byte)(i >> 8);
             Data[pos++] = (byte)i;
-            _end = pos;
+            End = pos;
         }
 
         internal void WriteUInt32(uint i)
         {
-            Contract.Requires(WriteSpaceLeft >= sizeof(uint));
-            var pos = _end;
+            Contract.Requires(SpaceLeft >= sizeof(uint));
+            var pos = End;
             Data[pos++] = (byte)(i >> 24);
             Data[pos++] = (byte)(i >> 16);
             Data[pos++] = (byte)(i >> 8);
             Data[pos++] = (byte)i;
-            _end = pos;
+            End = pos;
         }
 
         public void WriteInt64(long i)
         {
-            Contract.Requires(WriteSpaceLeft >= sizeof(long));
-            var pos = _end;
+            Contract.Requires(SpaceLeft >= sizeof(long));
+            var pos = End;
             Data[pos++] = (byte)(i >> 56);
             Data[pos++] = (byte)(i >> 48);
             Data[pos++] = (byte)(i >> 40);
@@ -179,14 +199,14 @@ namespace Npgsql
             Data[pos++] = (byte)(i >> 16);
             Data[pos++] = (byte)(i >> 8);
             Data[pos++] = (byte)i;
-            _end = pos;
+            End = pos;
         }
 
         public void WriteSingle(float f)
         {
-            Contract.Requires(WriteSpaceLeft >= sizeof(float));
+            Contract.Requires(SpaceLeft >= sizeof(float));
             _bitConverterUnion.float4 = f;
-            var pos = _end;
+            var pos = End;
             if (BitConverter.IsLittleEndian)
             {
                 Data[pos++] = _bitConverterUnion.b3;
@@ -201,14 +221,14 @@ namespace Npgsql
                 Data[pos++] = _bitConverterUnion.b2;
                 Data[pos++] = _bitConverterUnion.b3;
             }
-            _end = pos;
+            End = pos;
         }
 
         public void WriteDouble(double d)
         {
-            Contract.Requires(WriteSpaceLeft >= sizeof(double));
+            Contract.Requires(SpaceLeft >= sizeof(double));
             _bitConverterUnion.float8 = d;
-            var pos = _end;
+            var pos = End;
             if (BitConverter.IsLittleEndian)
             {
                 Data[pos++] = _bitConverterUnion.b7;
@@ -231,31 +251,31 @@ namespace Npgsql
                 Data[pos++] = _bitConverterUnion.b6;
                 Data[pos++] = _bitConverterUnion.b7;
             }
-            _end = pos;
+            End = pos;
         }
 
         internal void WriteString(string s, int len = 0)
         {
-            Contract.Requires(TextEncoding.GetByteCount(s) <= WriteSpaceLeft);
+            Contract.Requires(TextEncoding.GetByteCount(s) <= SpaceLeft);
             End += TextEncoding.GetBytes(s, 0, len == 0 ? s.Length : len, Data, End);
         }
 
         internal void WriteChars(char[] chars, int len = 0)
         {
-            Contract.Requires(TextEncoding.GetByteCount(chars) <= WriteSpaceLeft);
+            Contract.Requires(TextEncoding.GetByteCount(chars) <= SpaceLeft);
             End += TextEncoding.GetBytes(chars, 0, len == 0 ? chars.Length : len, Data, End);
         }
 
         public void WriteBytes(byte[] buf, int offset, int count)
         {
-            Contract.Requires(count <= WriteSpaceLeft);
+            Contract.Requires(count <= SpaceLeft);
             Buffer.BlockCopy(buf, offset, Data, End, count);
             End += count;
         }
 
         public void WriteBytesNullTerminated(byte[] buf)
         {
-            Contract.Requires(WriteSpaceLeft >= buf.Length + 1);
+            Contract.Requires(SpaceLeft >= buf.Length + 1);
             WriteBytes(buf, 0, buf.Length);
             WriteByte(0);
         }
@@ -268,7 +288,7 @@ namespace Npgsql
                                          bool flush, out int charsUsed, out bool completed)
         {
             int bytesUsed;
-            _textEncoder.Convert(chars, charIndex, charCount, Data, End, WriteSpaceLeft,
+            _textEncoder.Convert(chars, charIndex, charCount, Data, End, SpaceLeft,
                                  flush, out charsUsed, out bytesUsed, out completed);
             End += bytesUsed;
         }
@@ -279,6 +299,7 @@ namespace Npgsql
 
         internal void Clear()
         {
+            Start = 0;
             End = 0;
         }
 
@@ -301,6 +322,12 @@ namespace Npgsql
 
             [FieldOffset(0)] public float float4;
             [FieldOffset(0)] public double float8;
+        }
+
+        [ContractInvariantMethod]
+        void ObjectInvariants()
+        {
+            Contract.Invariant(Start <= End);
         }
 
         #endregion

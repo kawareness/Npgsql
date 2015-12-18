@@ -300,7 +300,7 @@ namespace Npgsql.TypeHandlers
         {
             if (_charPos == -1)
             {
-                if (_byteLen <= _writeBuf.WriteSpaceLeft)
+                if (_byteLen <= _writeBuf.SpaceLeft)
                 {
                     // Can simply write the string to the buffer
                     if (_str != null)

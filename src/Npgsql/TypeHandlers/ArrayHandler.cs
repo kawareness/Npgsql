@@ -352,7 +352,7 @@ namespace Npgsql.TypeHandlers
                         4 +               // element_oid
                         _dimensions * 8;  // dim (4) + lBound (4)
 
-                    if (_writeBuf.WriteSpaceLeft < len) {
+                    if (_writeBuf.SpaceLeft < len) {
                         Contract.Assume(_writeBuf.UsableSize >= len, "Buffer too small for header");
                         return false;
                     }
@@ -417,7 +417,7 @@ namespace Npgsql.TypeHandlers
         {
             // TODO: Need generic version of this...
             if (element == null || element is DBNull) {
-                if (_writeBuf.WriteSpaceLeft < 4) {
+                if (_writeBuf.SpaceLeft < 4) {
                     return false;
                 }
                 _writeBuf.WriteInt32(-1);
@@ -428,7 +428,7 @@ namespace Npgsql.TypeHandlers
             if (asSimpleWriter != null)
             {
                 var elementLen = asSimpleWriter.ValidateAndGetLength(element, null);
-                if (_writeBuf.WriteSpaceLeft < 4 + elementLen) { return false; }
+                if (_writeBuf.SpaceLeft < 4 + elementLen) { return false; }
                 _writeBuf.WriteInt32(elementLen);
                 asSimpleWriter.Write(element, _writeBuf, null);
                 return true;
@@ -438,7 +438,7 @@ namespace Npgsql.TypeHandlers
             if (asChunkedWriter != null)
             {
                 if (!_wroteElementLen) {
-                    if (_writeBuf.WriteSpaceLeft < 4) {
+                    if (_writeBuf.SpaceLeft < 4) {
                         return false;
                     }
                     _writeBuf.WriteInt32(asChunkedWriter.ValidateAndGetLength(element, ref _lengthCache, null));

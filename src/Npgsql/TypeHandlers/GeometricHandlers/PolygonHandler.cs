@@ -103,14 +103,14 @@ namespace Npgsql.TypeHandlers.GeometricHandlers
         {
             if (_index == -1)
             {
-                if (_writeBuf.WriteSpaceLeft < 4) { return false; }
+                if (_writeBuf.SpaceLeft < 4) { return false; }
                 _writeBuf.WriteInt32(_value.Count);
                 _index = 0;
             }
 
             for (; _index < _value.Count; _index++)
             {
-                if (_writeBuf.WriteSpaceLeft < 16) { return false; }
+                if (_writeBuf.SpaceLeft < 16) { return false; }
                 var p = _value[_index];
                 _writeBuf.WriteDouble(p.X);
                 _writeBuf.WriteDouble(p.Y);

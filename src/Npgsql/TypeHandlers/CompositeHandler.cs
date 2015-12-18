@@ -203,7 +203,7 @@ namespace Npgsql.TypeHandlers
         {
             if (_fieldIndex == -1)
             {
-                if (_writeBuf.WriteSpaceLeft < 4) { return false; }
+                if (_writeBuf.SpaceLeft < 4) { return false; }
                 _writeBuf.WriteInt32(_fields.Count);
                 _fieldIndex = 0;
             }
@@ -218,7 +218,7 @@ namespace Npgsql.TypeHandlers
                 if (asSimpleWriter != null)
                 {
                     var elementLen = asSimpleWriter.ValidateAndGetLength(fieldValue, null);
-                    if (_writeBuf.WriteSpaceLeft < 8 + elementLen) { return false; }
+                    if (_writeBuf.SpaceLeft < 8 + elementLen) { return false; }
                     _writeBuf.WriteUInt32(fieldDescriptor.Handler.OID);
                     _writeBuf.WriteInt32(elementLen);
                     asSimpleWriter.Write(fieldValue, _writeBuf, null);
@@ -230,7 +230,7 @@ namespace Npgsql.TypeHandlers
                 {
                     if (!_wroteFieldHeader)
                     {
-                        if (_writeBuf.WriteSpaceLeft < 8) { return false; }
+                        if (_writeBuf.SpaceLeft < 8) { return false; }
                         _writeBuf.WriteUInt32(fieldDescriptor.Handler.OID);
                         _writeBuf.WriteInt32(asChunkedWriter.ValidateAndGetLength(fieldValue, ref _lengthCache, null));
                         asChunkedWriter.PrepareWrite(fieldValue, _writeBuf, _lengthCache, null);

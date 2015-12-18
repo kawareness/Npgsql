@@ -622,6 +622,7 @@ namespace Npgsql
                         continue;
                     }
                     socket.Blocking = true;
+                    socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.NoDelay, true);
                     _socket = socket;
                     return;
                 }
@@ -690,6 +691,7 @@ namespace Npgsql
                         throw;
                     }
 
+                    socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.NoDelay, true);
                     _socket = socket;
                     return;
                 }
@@ -927,11 +929,11 @@ namespace Npgsql
             var asSimple = msg as SimpleFrontendMessage;
             if (asSimple != null)
             {
-                if (asSimple.Length > WriteBuffer.WriteSpaceLeft)
+                if (asSimple.Length > WriteBuffer.SpaceLeft)
                 {
                     WriteBuffer.Send();
                 }
-                Contract.Assume(WriteBuffer.WriteSpaceLeft >= asSimple.Length);
+                Contract.Assume(WriteBuffer.SpaceLeft >= asSimple.Length);
                 asSimple.Write(WriteBuffer);
                 return;
             }
