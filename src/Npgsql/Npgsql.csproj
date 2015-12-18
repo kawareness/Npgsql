@@ -163,6 +163,7 @@
     <Compile Include="Logging\INpgsqlLoggingProvider.cs" />
     <Compile Include="Logging\NpgsqlLogManager.cs" />
     <Compile Include="Logging\NpgsqlLogLevel.cs" />
+    <Compile Include="WriteBuffer.cs" />
     <Compile Include="NpgsqlLargeObjectManager.cs" />
     <Compile Include="NpgsqlLargeObjectStream.cs" />
     <Compile Include="NpgsqlBinaryExporter.cs" />
@@ -183,7 +184,7 @@
     <Compile Include="FrontendMessages\StartupMessage.cs" />
     <Compile Include="FrontendMessages\ParseMessage.cs" />
     <Compile Include="LengthCache.cs" />
-    <Compile Include="NpgsqlBuffer.cs" />
+    <Compile Include="ReadBuffer.cs" />
     <Compile Include="NpgsqlStatement.cs" />
     <Compile Include="NpgsqlTypes\NpgsqlTimeSpan.cs" />
     <Compile Include="NpgsqlTypes\NpgsqlRange.cs" />

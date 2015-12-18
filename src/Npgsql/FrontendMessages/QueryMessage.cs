@@ -45,14 +45,14 @@ namespace Npgsql.FrontendMessages
         internal QueryMessage(string query)
         {
             Contract.Requires(query != null && query.All(c => c < 128), "Not ASCII");
-            Contract.Requires(PGUtil.UTF8Encoding.GetByteCount(query) + 5 < NpgsqlBuffer.MinimumBufferSize, "Too long");
+            Contract.Requires(PGUtil.UTF8Encoding.GetByteCount(query) + 5 < ReadBuffer.MinimumSize, "Too long");
 
             Query = query;
         }
 
         internal override int Length => 1 + 4 + (Query.Length + 1);
 
-        internal override void Write(NpgsqlBuffer buf)
+        internal override void Write(WriteBuffer buf)
         {
             Contract.Requires(Query != null && Query.All(c => c < 128));
 

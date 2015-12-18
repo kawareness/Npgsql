@@ -32,11 +32,9 @@ using AsyncRewriter;
 
 namespace Npgsql
 {
-    internal partial class NpgsqlBuffer
+    internal partial class ReadBuffer
     {
         #region Fields and Properties
-
-        readonly Socket _socket;
 
         internal Stream Underlying { get; set; }
         /// <summary>
@@ -65,49 +63,38 @@ namespace Npgsql
         internal int ReadPosition { get; private set; }
         internal int ReadBytesLeft => _filledBytes - ReadPosition;
 
-        internal int WritePosition { get { return _writePosition; } set { _writePosition = value; } }
-        internal int WriteSpaceLeft => Size - _writePosition;
-
-        internal long TotalBytesFlushed { get; private set; }
-
         internal byte[] Data { get; }
         int _filledBytes;
         readonly Decoder _textDecoder;
-        readonly Encoder _textEncoder;
 
         readonly byte[] _workspace;
-
-        int _writePosition;
 
         /// <summary>
         /// Used for internal temporary purposes
         /// </summary>
         readonly char[] _tempCharBuf;
 
-        BitConverterUnion _bitConverterUnion;
-
         /// <summary>
         /// The minimum buffer size possible.
         /// </summary>
-        internal const int MinimumBufferSize = 4096;
-        internal const int DefaultBufferSize = 8192;
+        internal const int MinimumSize = 4096;
+        internal const int DefaultSize = 8192;
 
         #endregion
 
         #region Constructors
 
-        internal NpgsqlBuffer(Socket socket, Stream underlying, int size, Encoding textEncoding)
+        internal ReadBuffer(Stream underlying, int size, Encoding textEncoding)
             : this(size, textEncoding)
         {
-            _socket = socket;
             Underlying = underlying;
         }
 
-        internal NpgsqlBuffer(int size, Encoding textEncoding)
+        internal ReadBuffer(int size, Encoding textEncoding)
         {
-            if (size < MinimumBufferSize)
+            if (size < MinimumSize)
             {
-                throw new ArgumentOutOfRangeException(nameof(size), size, "Buffer size must be at least " + MinimumBufferSize);
+                throw new ArgumentOutOfRangeException(nameof(size), size, "Buffer size must be at least " + MinimumSize);
             }
             Contract.EndContractBlock();
 
@@ -116,7 +103,6 @@ namespace Npgsql
             Data = new byte[Size];
             TextEncoding = textEncoding;
             _textDecoder = TextEncoding.GetDecoder();
-            _textEncoder = TextEncoding.GetEncoder();
             _tempCharBuf = new char[1024];
             _workspace = new byte[8];
         }
@@ -163,7 +149,7 @@ namespace Npgsql
         /// read it in sequentially.
         /// </summary>
         [RewriteAsync]
-        internal NpgsqlBuffer EnsureOrAllocateTemp(int count)
+        internal ReadBuffer EnsureOrAllocateTemp(int count)
         {
             if (count <= Size) {
                 Ensure(count);
@@ -173,7 +159,7 @@ namespace Npgsql
             // Worst case: our buffer isn't big enough. For now, allocate a new buffer
             // and copy into it
             // TODO: Optimize with a pool later?
-            var tempBuf = new NpgsqlBuffer(_socket, Underlying, count, TextEncoding);
+            var tempBuf = new ReadBuffer(Underlying, count, TextEncoding);
             CopyTo(tempBuf);
             Clear();
             tempBuf.Ensure(count);
@@ -199,18 +185,6 @@ namespace Npgsql
             }
 
             ReadPosition += (int)len;
-        }
-
-        [RewriteAsync]
-        public void Send()
-        {
-            if (_writePosition != 0)
-            {
-                Contract.Assert(ReadBytesLeft == 0, "There cannot be read bytes buffered while a write operation is going on.");
-                var count = _socket.Send(Data, 0, _writePosition, SocketFlags.None);
-                TotalBytesFlushed += count;
-                _writePosition -= count;
-            }
         }
 
         #endregion
@@ -447,222 +421,7 @@ namespace Npgsql
 
         #endregion
 
-        #region Write Simple
-
-        public void WriteByte(byte b)
-        {
-            Contract.Requires(WriteSpaceLeft >= sizeof(byte));
-            Data[_writePosition++] = b;
-        }
-
-        public void WriteInt16(int i)
-        {
-            Contract.Requires(WriteSpaceLeft >= sizeof(short));
-            Data[_writePosition++] = (byte)(i >> 8);
-            Data[_writePosition++] = (byte)i;
-        }
-
-        public void WriteInt32(int i)
-        {
-            Contract.Requires(WriteSpaceLeft >= sizeof(int));
-            var pos = _writePosition;
-            Data[pos++] = (byte)(i >> 24);
-            Data[pos++] = (byte)(i >> 16);
-            Data[pos++] = (byte)(i >> 8);
-            Data[pos++] = (byte)i;
-            _writePosition = pos;
-        }
-
-        internal void WriteUInt32(uint i)
-        {
-            Contract.Requires(WriteSpaceLeft >= sizeof(uint));
-            var pos = _writePosition;
-            Data[pos++] = (byte)(i >> 24);
-            Data[pos++] = (byte)(i >> 16);
-            Data[pos++] = (byte)(i >> 8);
-            Data[pos++] = (byte)i;
-            _writePosition = pos;
-        }
-
-        public void WriteInt64(long i)
-        {
-            Contract.Requires(WriteSpaceLeft >= sizeof(long));
-            var pos = _writePosition;
-            Data[pos++] = (byte)(i >> 56);
-            Data[pos++] = (byte)(i >> 48);
-            Data[pos++] = (byte)(i >> 40);
-            Data[pos++] = (byte)(i >> 32);
-            Data[pos++] = (byte)(i >> 24);
-            Data[pos++] = (byte)(i >> 16);
-            Data[pos++] = (byte)(i >> 8);
-            Data[pos++] = (byte)i;
-            _writePosition = pos;
-        }
-
-        public void WriteSingle(float f)
-        {
-            Contract.Requires(WriteSpaceLeft >= sizeof(float));
-            _bitConverterUnion.float4 = f;
-            var pos = _writePosition;
-            if (BitConverter.IsLittleEndian)
-            {
-                Data[pos++] = _bitConverterUnion.b3;
-                Data[pos++] = _bitConverterUnion.b2;
-                Data[pos++] = _bitConverterUnion.b1;
-                Data[pos++] = _bitConverterUnion.b0;
-            }
-            else
-            {
-                Data[pos++] = _bitConverterUnion.b0;
-                Data[pos++] = _bitConverterUnion.b1;
-                Data[pos++] = _bitConverterUnion.b2;
-                Data[pos++] = _bitConverterUnion.b3;
-            }
-            _writePosition = pos;
-        }
-
-        public void WriteDouble(double d)
-        {
-            Contract.Requires(WriteSpaceLeft >= sizeof(double));
-            _bitConverterUnion.float8 = d;
-            var pos = _writePosition;
-            if (BitConverter.IsLittleEndian)
-            {
-                Data[pos++] = _bitConverterUnion.b7;
-                Data[pos++] = _bitConverterUnion.b6;
-                Data[pos++] = _bitConverterUnion.b5;
-                Data[pos++] = _bitConverterUnion.b4;
-                Data[pos++] = _bitConverterUnion.b3;
-                Data[pos++] = _bitConverterUnion.b2;
-                Data[pos++] = _bitConverterUnion.b1;
-                Data[pos++] = _bitConverterUnion.b0;
-            }
-            else
-            {
-                Data[pos++] = _bitConverterUnion.b0;
-                Data[pos++] = _bitConverterUnion.b1;
-                Data[pos++] = _bitConverterUnion.b2;
-                Data[pos++] = _bitConverterUnion.b3;
-                Data[pos++] = _bitConverterUnion.b4;
-                Data[pos++] = _bitConverterUnion.b5;
-                Data[pos++] = _bitConverterUnion.b6;
-                Data[pos++] = _bitConverterUnion.b7;
-            }
-            _writePosition = pos;
-        }
-
-        internal void WriteString(string s, int len = 0)
-        {
-            Contract.Requires(TextEncoding.GetByteCount(s) <= WriteSpaceLeft);
-            WritePosition += TextEncoding.GetBytes(s, 0, len == 0 ? s.Length : len, Data, WritePosition);
-        }
-
-        internal void WriteChars(char[] chars, int len = 0)
-        {
-            Contract.Requires(TextEncoding.GetByteCount(chars) <= WriteSpaceLeft);
-            WritePosition += TextEncoding.GetBytes(chars, 0, len == 0 ? chars.Length : len, Data, WritePosition);
-        }
-
-        public void WriteBytes(byte[] buf, int offset, int count)
-        {
-            Contract.Requires(count <= WriteSpaceLeft);
-            Buffer.BlockCopy(buf, offset, Data, WritePosition, count);
-            WritePosition += count;
-        }
-
-        public void WriteBytesNullTerminated(byte[] buf)
-        {
-            Contract.Requires(WriteSpaceLeft >= buf.Length + 1);
-            WriteBytes(buf, 0, buf.Length);
-            WriteByte(0);
-        }
-
-        #endregion
-
-        #region Write Complex
-
-        internal void WriteStringChunked(char[] chars, int charIndex, int charCount,
-                                         bool flush, out int charsUsed, out bool completed)
-        {
-            int bytesUsed;
-            _textEncoder.Convert(chars, charIndex, charCount, Data, WritePosition, WriteSpaceLeft,
-                                 flush, out charsUsed, out bytesUsed, out completed);
-            WritePosition += bytesUsed;
-        }
-
-        #endregion
-
-        #region Misc
-
-        /// <summary>
-        /// Seeks within the current in-memory data. Does not read any data from the underlying.
-        /// </summary>
-        /// <param name="offset"></param>
-        /// <param name="origin"></param>
-        internal void Seek(int offset, SeekOrigin origin)
-        {
-            int absoluteOffset;
-            switch (origin)
-            {
-                case SeekOrigin.Begin:
-                    absoluteOffset = offset;
-                    break;
-                case SeekOrigin.Current:
-                    absoluteOffset = ReadPosition + offset;
-                    break;
-                case SeekOrigin.End:
-                    throw new NotImplementedException();
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(origin));
-            }
-            Contract.Assert(absoluteOffset >= 0 && absoluteOffset <= _filledBytes);
-
-            ReadPosition = absoluteOffset;
-        }
-
-        internal void Clear()
-        {
-            WritePosition = 0;
-            ReadPosition = 0;
-            _filledBytes = 0;
-        }
-
-        internal void CopyTo(NpgsqlBuffer other)
-        {
-            Contract.Assert(other.Size - other._filledBytes >= ReadBytesLeft);
-            Array.Copy(Data, ReadPosition, other.Data, other._filledBytes, ReadBytesLeft);
-            other._filledBytes += ReadBytesLeft;
-        }
-
-        internal MemoryStream GetMemoryStream(int len)
-        {
-            return new MemoryStream(Data, ReadPosition, len, false, false);
-        }
-
-        internal void ResetTotalBytesFlushed()
-        {
-            TotalBytesFlushed = 0;
-        }
-
-        [StructLayout(LayoutKind.Explicit, Size = 8)]
-        struct BitConverterUnion
-        {
-            [FieldOffset(0)] public readonly byte b0;
-            [FieldOffset(1)] public readonly byte b1;
-            [FieldOffset(2)] public readonly byte b2;
-            [FieldOffset(3)] public readonly byte b3;
-            [FieldOffset(4)] public readonly byte b4;
-            [FieldOffset(5)] public readonly byte b5;
-            [FieldOffset(6)] public readonly byte b6;
-            [FieldOffset(7)] public readonly byte b7;
-
-            [FieldOffset(0)] public float float4;
-            [FieldOffset(0)] public double float8;
-        }
-
-        #endregion
-
-        #region Postgis
+        #region Read Variable Byte Order (PostGIS)
 
         internal int ReadInt32(ByteOrder bo)
         {
@@ -727,6 +486,55 @@ namespace Npgsql
                 return BitConverter.ToDouble(_workspace, 0);
             }
         }
+
+        #endregion
+
+        #region Misc
+
+        /// <summary>
+        /// Seeks within the current in-memory data. Does not read any data from the underlying.
+        /// </summary>
+        /// <param name="offset"></param>
+        /// <param name="origin"></param>
+        internal void Seek(int offset, SeekOrigin origin)
+        {
+            int absoluteOffset;
+            switch (origin)
+            {
+                case SeekOrigin.Begin:
+                    absoluteOffset = offset;
+                    break;
+                case SeekOrigin.Current:
+                    absoluteOffset = ReadPosition + offset;
+                    break;
+                case SeekOrigin.End:
+                    throw new NotImplementedException();
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(origin));
+            }
+            Contract.Assert(absoluteOffset >= 0 && absoluteOffset <= _filledBytes);
+
+            ReadPosition = absoluteOffset;
+        }
+
+        internal void Clear()
+        {
+            ReadPosition = 0;
+            _filledBytes = 0;
+        }
+
+        internal void CopyTo(ReadBuffer other)
+        {
+            Contract.Assert(other.Size - other._filledBytes >= ReadBytesLeft);
+            Array.Copy(Data, ReadPosition, other.Data, other._filledBytes, ReadBytesLeft);
+            other._filledBytes += ReadBytesLeft;
+        }
+
+        internal MemoryStream GetMemoryStream(int len)
+        {
+            return new MemoryStream(Data, ReadPosition, len, false, false);
+        }
+
         #endregion
     }
 }

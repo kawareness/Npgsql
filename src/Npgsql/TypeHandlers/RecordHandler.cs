@@ -43,7 +43,7 @@ namespace Npgsql.TypeHandlers
     internal class RecordHandler : ChunkingTypeHandler<object[]>
     {
         readonly TypeHandlerRegistry _registry;
-        NpgsqlBuffer _buf;
+        ReadBuffer _buf;
 
         int _fieldIndex, _fieldCount, _fieldLen;
         TypeHandler _fieldHandler;
@@ -56,7 +56,7 @@ namespace Npgsql.TypeHandlers
 
         #region Read
 
-        public override void PrepareRead(NpgsqlBuffer buf, int len, FieldDescription fieldDescription = null)
+        public override void PrepareRead(ReadBuffer buf, int len, FieldDescription fieldDescription = null)
         {
             _buf = buf;
             _fieldIndex = _fieldCount = - 1;
@@ -129,7 +129,7 @@ namespace Npgsql.TypeHandlers
             throw new NotSupportedException("Can't write record types");
         }
 
-        public override void PrepareWrite(object value, NpgsqlBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter)
+        public override void PrepareWrite(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter)
         {
             throw new NotSupportedException("Can't write record types");
         }

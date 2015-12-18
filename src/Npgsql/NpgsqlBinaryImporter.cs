@@ -47,7 +47,7 @@ namespace Npgsql
         #region Fields and Properties
 
         NpgsqlConnector _connector;
-        NpgsqlBuffer _buf;
+        WriteBuffer _buf;
         TypeHandlerRegistry _registry;
         LengthCache _lengthCache;
         bool _isDisposed;
@@ -76,7 +76,7 @@ namespace Npgsql
         internal NpgsqlBinaryImporter(NpgsqlConnector connector, string copyFromCommand)
         {
             _connector = connector;
-            _buf = connector.Buffer;
+            _buf = connector.WriteBuffer;
             _registry = connector.TypeHandlerRegistry;
             _lengthCache = new LengthCache();
             _column = -1;
@@ -236,13 +236,16 @@ namespace Npgsql
                         if (directBuf.Buffer != null)
                         {
                             len = directBuf.Size == 0 ? directBuf.Buffer.Length : directBuf.Size;
-                            _buf.WritePosition = 1;
+                            _buf.End = 1;
                             _buf.WriteInt32(len + 4);
                             _buf.Send();
                             _writingDataMsg = false;
+                            throw new NotImplementedException();
+                            /*
                             _buf.Underlying.Write(directBuf.Buffer, directBuf.Offset, len);
                             directBuf.Buffer = null;
                             directBuf.Size = 0;
+                            */
                         }
                         EnsureDataMessage();
                     }
@@ -301,19 +304,22 @@ namespace Npgsql
             if (!_writingDataMsg) { return; }
 
             // Need to update the length for the CopyData about to be sent
+            throw new NotImplementedException();
+            /*
             var pos = _buf.WritePosition;
             _buf.WritePosition = 1;
             _buf.WriteInt32(pos - 1);
             _buf.WritePosition = pos;
             _buf.Send();
             _writingDataMsg = false;
+            */
         }
 
         void EnsureDataMessage()
         {
             if (_writingDataMsg) { return; }
 
-            Contract.Assert(_buf.WritePosition == 0);
+            Contract.Assert(_buf.End == 0);
             _buf.WriteByte((byte)BackendMessageCode.CopyData);
             // Leave space for the message length
             _buf.WriteInt32(0);

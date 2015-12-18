@@ -44,16 +44,16 @@ namespace Npgsql.FrontendMessages
         /// </summary>
         /// <param name="buf">A buffer prepopulated with the bytes for this pregenerated message.</param>
         /// <param name="description">Optional string form/description for debugging</param>
-        internal PregeneratedMessage(NpgsqlBuffer buf, string description=null)
+        internal PregeneratedMessage(WriteBuffer buf, string description=null)
         {
-            _data = new byte[buf.WritePosition];
-            Array.Copy(buf.Data, _data, buf.WritePosition);
+            _data = new byte[buf.End];
+            Array.Copy(buf.Data, _data, buf.End);
             _description = description;
         }
 
         internal override int Length => _data.Length;
 
-        internal override void Write(NpgsqlBuffer buf)
+        internal override void Write(WriteBuffer buf)
         {
             buf.WriteBytes(_data, 0, _data.Length);
         }
@@ -63,11 +63,11 @@ namespace Npgsql.FrontendMessages
             return _description ?? "[?]";
         }
 
-        static readonly NpgsqlBuffer _tempBuf;
+        static readonly WriteBuffer _tempBuf;
 
         static PregeneratedMessage()
         {
-            _tempBuf = new NpgsqlBuffer(NpgsqlBuffer.MinimumBufferSize, Encoding.ASCII);
+            _tempBuf = new WriteBuffer(ReadBuffer.MinimumSize, Encoding.ASCII);
 
             BeginTransRepeatableRead  = BuildQuery("BEGIN; SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;");
             BeginTransSerializable    = BuildQuery("BEGIN; SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;");

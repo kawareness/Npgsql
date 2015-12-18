@@ -398,11 +398,12 @@ namespace Npgsql
         {
             Contract.Requires(!IsSchemaOnly);
 
+            // Check our internal state.
+            // If we're in the middle of a resultset, consume it. If we're already closed, exit.
             try
             {
                 switch (State)
                 {
-                // If we're in the middle of a resultset, consume it
                 case ReaderState.InResult:
                     if (_row != null) {
                         _row.Consume();
@@ -436,6 +437,9 @@ namespace Npgsql
                 // Send more messages if needed and process the results until we get to a new resultset
                 while (true)
                 {
+                    SendMoreStatements();
+                    Contract.Assert(_statementsConsumed < _statementsSent);
+
                     while (_statementsConsumed < _statementsSent)
                     {
                         // TODO: Error handling, e.g. bad SQL!
@@ -473,6 +477,7 @@ namespace Npgsql
                             }
                             throw new Exception($"Received unexpected backend message {msg.Code}. Please file a bug.");
                         }
+
                         // Ladies and gentlement, we have a resultset
                         _rowDescription = statement.Description;
                         State = ReaderState.InResult;
@@ -488,9 +493,6 @@ namespace Npgsql
                         _rowDescription = null;
                         return false;
                     }
-
-                    SendMoreStatements();
-                    Contract.Assert(_statementsConsumed < _statementsSent);
                 }
                 /*
                 if ((_behavior & CommandBehavior.SingleResult) != 0)
@@ -512,61 +514,84 @@ namespace Npgsql
         void SendMoreStatements()
         {
             Contract.Requires(_messageChain.Any());
-
-            var buf = _connector.Buffer;
-            while (true)
+            var buf = _connector.WriteBuffer;
+            var blocking = true;
+            try
             {
-                if (!_messageChain.Any())
+                while (true)
                 {
-                    // Finished sending everything
-                    buf.Send();
-                    return;
-                }
-
-                var msg = _messageChain.Peek();
-
-                Log.Trace($"Sending: {msg}", _connector.Id);
-
-                var asSimple = msg as SimpleFrontendMessage;
-                if (asSimple != null)
-                {
-                    if (asSimple.Length > buf.WriteSpaceLeft)
+                    if (!_messageChain.Any())
                     {
+                        // Finished sending everything
                         buf.Send();
+                        return;
                     }
-                    Contract.Assume(buf.WriteSpaceLeft >= asSimple.Length);
-                    asSimple.Write(buf);
-                }
-                else
-                {
-                    var asComplex = msg as ChunkingFrontendMessage;
-                    if (asComplex != null)
+
+                    var msg = _messageChain.Peek();
+
+                    Log.Trace($"Sending: {msg}", _connector.Id);
+
+                    var asSimple = msg as SimpleFrontendMessage;
+                    if (asSimple != null)
                     {
-                        var directBuf = new DirectBuffer();
-                        while (!asComplex.Write(buf, ref directBuf))
+                        if (asSimple.Length > buf.WriteSpaceLeft)
                         {
                             buf.Send();
-
-                            // The following is an optimization hack for writing large byte arrays without passing
-                            // through our buffer
-                            if (directBuf.Buffer != null)
+                        }
+                        Contract.Assume(buf.WriteSpaceLeft >= asSimple.Length);
+                        asSimple.Write(buf);
+                    }
+                    else
+                    {
+                        var asComplex = msg as ChunkingFrontendMessage;
+                        if (asComplex != null)
+                        {
+                            var directBuf = new DirectBuffer();
+                            while (!asComplex.Write(buf, ref directBuf))
                             {
-                                throw new NotImplementedException();
-                                /*
+                                buf.Send();
+
+                                // The following is an optimization hack for writing large byte arrays without passing
+                                // through our buffer
+                                if (directBuf.Buffer != null)
+                                {
+                                    throw new NotImplementedException();
+                                    /*
                                 buf.Underlying.Write(directBuf.Buffer, directBuf.Offset,
                                     directBuf.Size == 0 ? directBuf.Buffer.Length : directBuf.Size);
                                 directBuf.Buffer = null;
                                 directBuf.Size = 0;
                                 */
+                                }
                             }
                         }
-                    } else throw PGUtil.ThrowIfReached();
-                }
+                        else throw PGUtil.ThrowIfReached();
+                    }
 
-                // Message has been fully sent, remove it from the chain
-                _messageChain.Dequeue();
-                if (msg is ExecuteMessage) {
-                    _statementsSent++;
+                    // Message has been fully sent, remove it from the chain
+                    _messageChain.Dequeue();
+
+                    if (msg is ExecuteMessage)
+                    {
+                        _statementsSent++;
+                        if (_messageChain.Any())
+                        {
+                            // There are still messages left to send.
+                            // Put the socket in non-blocking mode and attempt to send whatever we can. If a send would block,
+                            // stop and transfer control back to the user - the server may be waiting for us to consume its results.
+                            buf.Socket.Blocking = false;
+                            blocking = false;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                // We may have set the socket to nonblocking mode during writing, when leaving this method we must be
+                // blocking again for reads.v
+                if (!blocking)
+                {
+                    buf.Socket.Blocking = true;
                 }
             }
         }

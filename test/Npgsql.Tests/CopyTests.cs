@@ -284,8 +284,9 @@ namespace Npgsql.Tests
                 writer.StartRow();
                 writer.Write(data, NpgsqlDbType.Text);
             }
-            Assert.That(Conn.Connector.Buffer.UsableSize, Is.EqualTo(Conn.Connector.Buffer.Size));
-            Assert.That(ExecuteScalar("SELECT field FROM data"), Is.EqualTo(data));
+            throw new NotImplementedException();
+            //Assert.That(Conn.Connector.Buffer.UsableSize, Is.EqualTo(Conn.Connector.Buffer.Size));
+            //Assert.That(ExecuteScalar("SELECT field FROM data"), Is.EqualTo(data));
         }
 
         [Test]
@@ -378,7 +379,7 @@ namespace Npgsql.Tests
             ExecuteNonQuery("TRUNCATE data");
 
             // Long (multi-buffer) write
-            var iterations = NpgsqlBuffer.MinimumBufferSize / line.Length + 100;
+            var iterations = ReadBuffer.MinimumSize / line.Length + 100;
             writer = Conn.BeginTextImport("COPY data (field_text, field_int4) FROM STDIN");
             for (var i = 0; i < iterations; i++)
               writer.Write(line);

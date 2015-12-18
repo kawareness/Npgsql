@@ -56,7 +56,7 @@ namespace Npgsql
         /// <summary>
         /// Writes the message contents into the buffer.
         /// </summary>
-        internal abstract void Write(NpgsqlBuffer buf);
+        internal abstract void Write(WriteBuffer buf);
     }
 
     /// <summary>
@@ -74,7 +74,7 @@ namespace Npgsql
         /// Whether there was enough space in the buffer to contain the entire message.
         /// If false, the buffer should be flushed and write should be called again.
         /// </returns>
-        internal abstract bool Write(NpgsqlBuffer buf, ref DirectBuffer directBuf);
+        internal abstract bool Write(WriteBuffer buf, ref DirectBuffer directBuf);
     }
 
     internal enum BackendMessageCode : byte

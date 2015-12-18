@@ -52,7 +52,7 @@ namespace Npgsql.FrontendMessages
             }
         }
 
-        internal override void Write(NpgsqlBuffer buf)
+        internal override void Write(WriteBuffer buf)
         {
             buf.WriteInt32(_length);
             buf.WriteInt32(ProtocolVersion3);

@@ -67,7 +67,8 @@ namespace Npgsql.TypeHandlers
         public List<Tuple<string, uint>> RawFields { get; set; }
         List<FieldDescriptor> _fields;
 
-        NpgsqlBuffer _buf;
+        ReadBuffer _readBuf;
+        WriteBuffer _writeBuf;
         LengthCache _lengthCache;
 
         int _fieldIndex;
@@ -86,10 +87,10 @@ namespace Npgsql.TypeHandlers
 
         #region Read
 
-        public override void PrepareRead(NpgsqlBuffer buf, int len, FieldDescription fieldDescription = null)
+        public override void PrepareRead(ReadBuffer buf, int len, FieldDescription fieldDescription = null)
         {
             ResolveFieldsIfNeeded();
-            _buf = buf;
+            _readBuf = buf;
             _fieldIndex = -1;
             _len = -1;
             _value = new T();
@@ -101,8 +102,8 @@ namespace Npgsql.TypeHandlers
 
             if (_fieldIndex == -1)
             {
-                if (_buf.ReadBytesLeft < 4) { return false; }
-                var fieldCount = _buf.ReadInt32();
+                if (_readBuf.ReadBytesLeft < 4) { return false; }
+                var fieldCount = _readBuf.ReadInt32();
                 if (fieldCount != _fields.Count) {
                     // PostgreSQL sanity check
                     throw new Exception(
@@ -118,10 +119,10 @@ namespace Npgsql.TypeHandlers
                 // Read the type OID (not really needed), then the length.
                 if (_len == -1)
                 {
-                    if (_buf.ReadBytesLeft < 8) { return false; }
-                    var typeOID = _buf.ReadInt32();
+                    if (_readBuf.ReadBytesLeft < 8) { return false; }
+                    var typeOID = _readBuf.ReadInt32();
                     Contract.Assume(typeOID == fieldDescriptor.Handler.OID);
-                    _len = _buf.ReadInt32();
+                    _len = _readBuf.ReadInt32();
                     if (_len == -1)
                     {
                         // Null field, simply skip it and leave at default
@@ -136,13 +137,13 @@ namespace Npgsql.TypeHandlers
                 if (handler is ISimpleTypeHandler)
                 {
                     var asSimpleReader = (ISimpleTypeHandler)handler;
-                    if (_buf.ReadBytesLeft < _len) { return false; }
-                    fieldValue = asSimpleReader.ReadAsObject(_buf, _len);
+                    if (_readBuf.ReadBytesLeft < _len) { return false; }
+                    fieldValue = asSimpleReader.ReadAsObject(_readBuf, _len);
                 }
                 else if (handler is IChunkingTypeHandler)
                 {
                     var asChunkingReader = (IChunkingTypeHandler)handler;
-                    asChunkingReader.PrepareRead(_buf, _len);
+                    asChunkingReader.PrepareRead(_readBuf, _len);
                     if (!asChunkingReader.ReadAsObject(out fieldValue)) {
                         return false;
                     }
@@ -189,10 +190,10 @@ namespace Npgsql.TypeHandlers
             return lengthCache.Lengths[pos] = totalLen;
         }
 
-        public override void PrepareWrite(object value, NpgsqlBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter)
+        public override void PrepareWrite(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter)
         {
             _value = (T)value;
-            _buf = buf;
+            _writeBuf = buf;
             _lengthCache = lengthCache;
             _fieldIndex = -1;
             _wroteFieldHeader = false;
@@ -202,8 +203,8 @@ namespace Npgsql.TypeHandlers
         {
             if (_fieldIndex == -1)
             {
-                if (_buf.WriteSpaceLeft < 4) { return false; }
-                _buf.WriteInt32(_fields.Count);
+                if (_writeBuf.WriteSpaceLeft < 4) { return false; }
+                _writeBuf.WriteInt32(_fields.Count);
                 _fieldIndex = 0;
             }
 
@@ -217,10 +218,10 @@ namespace Npgsql.TypeHandlers
                 if (asSimpleWriter != null)
                 {
                     var elementLen = asSimpleWriter.ValidateAndGetLength(fieldValue, null);
-                    if (_buf.WriteSpaceLeft < 8 + elementLen) { return false; }
-                    _buf.WriteUInt32(fieldDescriptor.Handler.OID);
-                    _buf.WriteInt32(elementLen);
-                    asSimpleWriter.Write(fieldValue, _buf, null);
+                    if (_writeBuf.WriteSpaceLeft < 8 + elementLen) { return false; }
+                    _writeBuf.WriteUInt32(fieldDescriptor.Handler.OID);
+                    _writeBuf.WriteInt32(elementLen);
+                    asSimpleWriter.Write(fieldValue, _writeBuf, null);
                     continue;
                 }
 
@@ -229,10 +230,10 @@ namespace Npgsql.TypeHandlers
                 {
                     if (!_wroteFieldHeader)
                     {
-                        if (_buf.WriteSpaceLeft < 8) { return false; }
-                        _buf.WriteUInt32(fieldDescriptor.Handler.OID);
-                        _buf.WriteInt32(asChunkedWriter.ValidateAndGetLength(fieldValue, ref _lengthCache, null));
-                        asChunkedWriter.PrepareWrite(fieldValue, _buf, _lengthCache, null);
+                        if (_writeBuf.WriteSpaceLeft < 8) { return false; }
+                        _writeBuf.WriteUInt32(fieldDescriptor.Handler.OID);
+                        _writeBuf.WriteInt32(asChunkedWriter.ValidateAndGetLength(fieldValue, ref _lengthCache, null));
+                        asChunkedWriter.PrepareWrite(fieldValue, _writeBuf, _lengthCache, null);
                         _wroteFieldHeader = true;
                     }
                     if (!asChunkedWriter.Write(ref directBuf))

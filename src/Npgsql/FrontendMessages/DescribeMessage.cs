@@ -51,7 +51,7 @@ namespace Npgsql.FrontendMessages
 
         internal override int Length => 1 + 4 + 1 + (Name.Length + 1);
 
-        internal override void Write(NpgsqlBuffer buf)
+        internal override void Write(WriteBuffer buf)
         {
             Contract.Requires(Name != null && Name.All(c => c < 128));
 

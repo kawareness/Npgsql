@@ -119,10 +119,10 @@ namespace Npgsql.Tests
         public void SetUp()
         {
             Underlying = new MemoryStream();
-            Buffer = new NpgsqlBuffer(null, Underlying, NpgsqlBuffer.DefaultBufferSize, PGUtil.UTF8Encoding);
+            Buffer = new ReadBuffer(Underlying, ReadBuffer.DefaultSize, PGUtil.UTF8Encoding);
         }
 
-        NpgsqlBuffer Buffer;
+        ReadBuffer Buffer;
         MemoryStream Underlying;
     }
 }
