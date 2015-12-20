@@ -475,12 +475,13 @@ namespace Npgsql.Tests
         [Test]
         public void SingleResult()
         {
-            var cmd = new NpgsqlCommand(@"SELECT 1; SELECT 2", Conn);
-            var rdr = cmd.ExecuteReader(CommandBehavior.SingleResult);
-            Assert.That(rdr.Read(), Is.True);
-            Assert.That(rdr.GetInt32(0), Is.EqualTo(1));
-            Assert.That(rdr.NextResult(), Is.False);
-            rdr.Close();
+            using (var cmd = new NpgsqlCommand(@"SELECT 1; SELECT 2", Conn))
+            using (var rdr = cmd.ExecuteReader(CommandBehavior.SingleResult))
+            {
+                Assert.That(rdr.Read(), Is.True);
+                Assert.That(rdr.GetInt32(0), Is.EqualTo(1));
+                Assert.That(rdr.NextResult(), Is.False);
+            }
         }
 
         [Test]
@@ -811,6 +812,19 @@ namespace Npgsql.Tests
             reader.Read();
             reader.Close();
             command.Dispose();
+        }
+
+        [Test, Description("Make sure that when prematurely disposing a reader, all statements are always sent to the database")]
+        public void CloseInMiddleOfLargeMultistatement()
+        {
+            ExecuteNonQuery("DROP TABLE IF EXISTS foo; CREATE TEMP TABLE foo (a int)");
+            var data = new byte[1024 * 1024];
+            using (var cmd = new NpgsqlCommand("SELECT @p; SELECT @p; INSERT INTO foo (a) VALUES (8)", Conn))
+            {
+                cmd.Parameters.AddWithValue("p", data);
+                cmd.ExecuteReader().Dispose();
+            }
+            Assert.That(ExecuteScalar("SELECT a FROM foo"), Is.EqualTo(8));
         }
 
         [Test]

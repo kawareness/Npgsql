@@ -31,37 +31,47 @@ namespace Npgsql.FrontendMessages
 {
     class ExecuteMessage : SimpleFrontendMessage
     {
+        internal FlushOrSync FlushOrSync { get; private set; }
         internal string Portal { get; private set; }
         internal int MaxRows { get; private set; }
 
         const byte Code = (byte)'E';
 
-        internal ExecuteMessage() {}
+        internal ExecuteMessage() { }
 
-        internal ExecuteMessage(string portal="", int maxRows=0)
+        internal ExecuteMessage(FlushOrSync flushOrSync, string portal = "", int maxRows = 0)
         {
-            Populate(portal, maxRows);
+            Populate(FlushOrSync, portal, maxRows);
         }
 
-        internal ExecuteMessage Populate(string portal = "", int maxRows = 0)
+        internal ExecuteMessage Populate(FlushOrSync flushOrSync, string portal = "", int maxRows = 0)
         {
+            FlushOrSync = flushOrSync;
             Portal = portal;
             //MaxRows = maxRows;
             return this;
         }
 
-        internal override int Length => 1 + 4 + (Portal.Length + 1) + 4;
+        internal override int Length => ExecuteLength + FlushOrSyncLength;
+        int ExecuteLength => 1 + 4 + (Portal.Length + 1) + 4;
+        const int FlushOrSyncLength = 1 + 4;
 
         internal override void Write(WriteBuffer buf)
         {
             Contract.Requires(Portal != null && Portal.All(c => c < 128));
 
-            // TODO: Recycle?
-            var portalNameBytes = Encoding.ASCII.GetBytes(Portal);
             buf.WriteByte(Code);
-            buf.WriteInt32(Length - 1);
-            buf.WriteBytesNullTerminated(portalNameBytes);
+            buf.WriteInt32(ExecuteLength - 1);
+            if (Portal == "")
+                buf.WriteByte(0);
+            else
+                buf.WriteBytesNullTerminated(Encoding.ASCII.GetBytes(Portal));
             buf.WriteInt32(MaxRows);
+
+            if (FlushOrSync == FlushOrSync.Flush)
+                FlushMessage.Instance.Write(buf);
+            else
+                SyncMessage.Instance.Write(buf);
         }
 
         public override string ToString()
@@ -69,4 +79,6 @@ namespace Npgsql.FrontendMessages
             return $"[Execute(Portal={Portal},MaxRows={MaxRows}]";
         }
     }
+
+    enum FlushOrSync { Flush, Sync }
 }

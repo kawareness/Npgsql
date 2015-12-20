@@ -42,7 +42,6 @@ namespace Npgsql
     {
         internal static readonly UTF8Encoding UTF8Encoding = new UTF8Encoding(false, true);
         internal static readonly UTF8Encoding RelaxedUTF8Encoding = new UTF8Encoding(false, false);
-
         public static int RotateShift(int val, int shift)
         {
             return (val << shift) | (val >> (sizeof (int) - shift));

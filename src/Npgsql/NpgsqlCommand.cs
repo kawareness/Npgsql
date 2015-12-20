@@ -641,57 +641,15 @@ namespace Npgsql
                     _messageChain.Enqueue(bundle.DescribeMessage.Populate(StatementOrPortal.Portal));
                 }
 
-                _messageChain.Enqueue(bundle.ExecuteMessage.Populate("", (behavior & CommandBehavior.SingleRow) != 0 ? 1 : 0));
+                // We need to be sure the server starts sending results right after it gets the Execute
+                // to avoid deadlocks
+                var flushOrSync = i == _statements.Count - 1 ? FlushOrSync.Sync : FlushOrSync.Flush;
+                _messageChain.Enqueue(bundle.ExecuteMessage.Populate(
+                    flushOrSync,
+                    "",
+                    (behavior & CommandBehavior.SingleRow) != 0 ? 1 : 0)
+                );
             }
-            _messageChain.Enqueue(SyncMessage.Instance);
-        }
-
-        void CreateMessagesNonPrepared(CommandBehavior behavior)
-        {
-            Contract.Requires((behavior & CommandBehavior.SchemaOnly) == 0);
-
-            ProcessRawQuery();
-            EnsureMessagePoolCapacity(_statements.Count);
-            for (var i = 0; i < _statements.Count; i++)
-            {
-                var query = _statements[i];
-                var bundle = _messagePool[i];
-
-                _messageChain.Enqueue(bundle.ParseMessage.Populate(query, _connector.TypeHandlerRegistry));
-
-                var bindMessage = bundle.BindMessage;
-                bindMessage.Populate(query.InputParameters);
-                if (AllResultTypesAreUnknown) {
-                    bindMessage.AllResultTypesAreUnknown = AllResultTypesAreUnknown;
-                } else if (i == 0 && UnknownResultTypeList != null) {
-                    bindMessage.UnknownResultTypeList = UnknownResultTypeList;
-                }
-                _messageChain.Enqueue(bindMessage);
-                _messageChain.Enqueue(bundle.DescribeMessage.Populate(StatementOrPortal.Portal));
-                _messageChain.Enqueue(bundle.ExecuteMessage.Populate("", (behavior & CommandBehavior.SingleRow) != 0 ? 1 : 0));
-            }
-            _messageChain.Enqueue(SyncMessage.Instance);
-        }
-
-        void CreateMessagesPrepared(CommandBehavior behavior)
-        {
-            EnsureMessagePoolCapacity(_statements.Count);
-            for (var i = 0; i < _statements.Count; i++)
-            {
-                var query = _statements[i];
-                var bundle = _messagePool[i];
-
-                var bindMessage = bundle.BindMessage;
-                bindMessage.Populate(query.InputParameters, query.PreparedStatementName, "");
-                if (AllResultTypesAreUnknown) {
-                    bindMessage.AllResultTypesAreUnknown = AllResultTypesAreUnknown;
-                } else if (i == 0 && UnknownResultTypeList != null) {
-                    bindMessage.UnknownResultTypeList = UnknownResultTypeList;
-                }
-                _messageChain.Enqueue(bindMessage);
-                _messageChain.Enqueue(bundle.ExecuteMessage.Populate("", (behavior & CommandBehavior.SingleRow) != 0 ? 1 : 0));
-            }
-            _messageChain.Enqueue(SyncMessage.Instance);
         }
 
         void CreateMessagesSchemaOnly(CommandBehavior behavior)

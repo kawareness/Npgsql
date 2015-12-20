@@ -531,9 +531,8 @@ namespace Npgsql
 
         void SendMoreStatements()
         {
-            SocketError err;
-
             Contract.Requires(_messageChain.Any());
+
             var buf = _connector.WriteBuffer;
             var blocking = true;
             try
@@ -547,7 +546,7 @@ namespace Npgsql
 
                 if (buf.LeftToSend > 0)
                 {
-                    // There's some data leftover in the buffer from a previous non-blocking send that did not fully complete.
+                    // There's some message data leftover in the buffer from a previous non-blocking send that did not fully complete.
                     // Attempt to complete it now
                     if (!buf.Send()) { return; }
                     _statementsSent = _statementsWritten;
@@ -557,12 +556,11 @@ namespace Npgsql
                 {
                     // There's some data leftover in the direct buffer from a previous non-blocking send that did not fully complete.
                     // Attempt to complete it now
-                    var sent = buf.Socket.Send(_directBuf.Buffer, _directBuf.Offset, _directBuf.Size, SocketFlags.None, out err);
+                    var sent = buf.Socket.CheckedSend(_directBuf.Buffer, _directBuf.Offset, _directBuf.Size);
                     if (sent < _directBuf.Size)
                     {
                         // The direct buffer could only be partially sent in non-blocking mode.
                         // Make arrangements to continue writing in the next send
-                        Contract.Assume(err == SocketError.WouldBlock);
                         _directBuf.Offset += sent;
                         _directBuf.Size -= sent;
                         return;
@@ -612,7 +610,6 @@ namespace Npgsql
                             while (!asComplex.Write(buf, ref _directBuf))
                             {
                                 if (!buf.Send()) { return; }
-                                Console.WriteLine("Send buffer");
                                 _statementsSent = _statementsWritten;
 
                                 // The following is an optimization hack for writing large byte arrays without passing
@@ -651,7 +648,8 @@ namespace Npgsql
 
                     if (msg is ExecuteMessage) {
                         _statementsWritten++;
-                        Console.WriteLine($"Wrote Execute ({_statementsWritten} statements written");
+                        // Note that the Execute message implicitly causes a Flush or Sync to be written right
+                        // after it, to avoid deadlocks
                     }
                 }
             }
@@ -858,28 +856,7 @@ namespace Npgsql
                 return;
             }
 
-            if (_row != null)
-            {
-                _row.Consume();
-                _row = null;
-            }
-
-            // Skip over the other result sets, processing only CommandCompleted for RecordsAffected
-            while (true)
-            {
-                var msg = SkipUntil(BackendMessageCode.CompletedResponse, BackendMessageCode.ReadyForQuery);
-                switch (msg.Code)
-                {
-                    case BackendMessageCode.CompletedResponse:
-                        ProcessMessage(msg);
-                        continue;
-                    case BackendMessageCode.ReadyForQuery:
-                        ProcessMessage(msg);
-                        return;
-                    default:
-                        throw new Exception("Unexpected message of type " + msg.Code);
-                }
-            }
+            while (NextResultInternal()) { }
         }
 
         /// <summary>
@@ -1151,9 +1128,9 @@ namespace Npgsql
             }
         }
 
-        #endregion
+#endregion
 
-        #region Provider-specific type getters
+#region Provider-specific type getters
 
         /// <summary>
         /// Gets the value of the specified column as an <see cref="NpgsqlDate"/>,
@@ -1774,7 +1751,7 @@ namespace Npgsql
             return result;
         }
 
-        #region Schema metadata table
+#region Schema metadata table
 #if NET45 || NET451 || DNX451
 
         /// <summary>
@@ -2174,9 +2151,9 @@ WHERE a.attnum > 0
         }
 
 #endif
-        #endregion Schema metadata table
+#endregion Schema metadata table
 
-        #region Checks
+#region Checks
 
         [ContractArgumentValidator]
         void CheckRowAndOrdinal(int ordinal)
@@ -2210,9 +2187,9 @@ WHERE a.attnum > 0
                 throw new InvalidOperationException("No resultset is currently being traversed");
         }
 
-        #endregion
+#endregion
 
-        #region Enums
+#region Enums
 
         enum ReaderState
         {
@@ -2229,6 +2206,6 @@ WHERE a.attnum > 0
             ReadAgain,
         }
 
-        #endregion
+#endregion
     }
 }
