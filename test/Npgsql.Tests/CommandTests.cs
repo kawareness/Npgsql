@@ -134,15 +134,14 @@ namespace Npgsql.Tests
         }
 
         [Test, IssueLink("https://github.com/npgsql/npgsql/issues/641")]
-        [Timeout(10000)]
         public void MultipleStatementsNoDeadlock()
         {
-            var outgoingData = new byte[1024 * 1024];
-            var incomingData = new byte[1024 * 1024];
-            using (var cmd = new NpgsqlCommand("SELECT @incoming; SELECT @outgoing", Conn))
+            var conn = new NpgsqlConnection("Host=mammoth;Database=npgsql_tests;Username=npgsql_tests;Password=npgsql_tests");
+            conn.Open();
+            var data = new byte[1024 * 1024 * 20];
+            using (var cmd = new NpgsqlCommand("SELECT @p; SELECT @p", conn))
             {
-                cmd.Parameters.AddWithValue("incoming", incomingData);
-                cmd.Parameters.AddWithValue("outgoing", outgoingData);
+                cmd.Parameters.AddWithValue("p", data);
                 cmd.ExecuteNonQuery();
             }
         }

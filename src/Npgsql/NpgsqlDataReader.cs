@@ -531,6 +531,8 @@ namespace Npgsql
 
         void SendMoreStatements()
         {
+            SocketError err;
+
             Contract.Requires(_messageChain.Any());
             var buf = _connector.WriteBuffer;
             var blocking = true;
@@ -555,11 +557,12 @@ namespace Npgsql
                 {
                     // There's some data leftover in the direct buffer from a previous non-blocking send that did not fully complete.
                     // Attempt to complete it now
-                    var sent = buf.Socket.Send(_directBuf.Buffer, _directBuf.Offset, _directBuf.Size, SocketFlags.None);
+                    var sent = buf.Socket.Send(_directBuf.Buffer, _directBuf.Offset, _directBuf.Size, SocketFlags.None, out err);
                     if (sent < _directBuf.Size)
                     {
                         // The direct buffer could only be partially sent in non-blocking mode.
                         // Make arrangements to continue writing in the next send
+                        Contract.Assume(err == SocketError.WouldBlock);
                         _directBuf.Offset += sent;
                         _directBuf.Size -= sent;
                         return;
@@ -615,12 +618,23 @@ namespace Npgsql
                                 // through our buffer
                                 if (_directBuf.Buffer != null)
                                 {
+                                    if (_statementsConsumed < _statementsSent && blocking)
+                                    {
+                                        // There are still statements that we've sent without consuming their results - switch to non-blocking.
+                                        // If a send would block, stop and transfer control back to the user - the server may be blocking on us
+                                        // to consume its results.
+                                        buf.Socket.Blocking = false;
+                                        blocking = false;
+                                    }
+
+                                    // TODO: Possibly need to switch to non-blocking here!
                                     Contract.Assert(_directBuf.Size > 0);
-                                    var sent = buf.Socket.Send(_directBuf.Buffer, _directBuf.Offset, _directBuf.Size, SocketFlags.None);
+                                    var sent = buf.Socket.Send(_directBuf.Buffer, _directBuf.Offset, _directBuf.Size, SocketFlags.None, out err);
                                     if (sent < _directBuf.Size)
                                     {
                                         // The direct buffer could only be partially sent in non-blocking mode.
                                         // Make arrangements to continue writing in the next send
+                                        Contract.Assume(err == SocketError.WouldBlock);
                                         _directBuf.Offset += sent;
                                         _directBuf.Size -= sent;
                                         return;

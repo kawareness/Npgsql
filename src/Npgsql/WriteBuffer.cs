@@ -137,13 +137,15 @@ namespace Npgsql
             }
 
             var count = LeftToSend;
-            var sent = Socket.Send(Data, Start, count, SocketFlags.None);
+            SocketError err;
+            var sent = Socket.Send(Data, Start, count, SocketFlags.None, out err);
             TotalBytesWritten += sent;
             if (sent == count)
             {
                 Clear();
                 return true;
             }
+            Contract.Assume(err == SocketError.WouldBlock);
             Start += count;
             return false;
         }

@@ -622,7 +622,7 @@ namespace Npgsql
                         continue;
                     }
                     socket.Blocking = true;
-                    socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.NoDelay, true);
+                    //socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.NoDelay, true);
                     _socket = socket;
                     return;
                 }
