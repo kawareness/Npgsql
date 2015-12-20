@@ -612,6 +612,7 @@ namespace Npgsql
                             while (!asComplex.Write(buf, ref _directBuf))
                             {
                                 if (!buf.Send()) { return; }
+                                Console.WriteLine("Send buffer");
                                 _statementsSent = _statementsWritten;
 
                                 // The following is an optimization hack for writing large byte arrays without passing
@@ -629,12 +630,11 @@ namespace Npgsql
 
                                     // TODO: Possibly need to switch to non-blocking here!
                                     Contract.Assert(_directBuf.Size > 0);
-                                    var sent = buf.Socket.Send(_directBuf.Buffer, _directBuf.Offset, _directBuf.Size, SocketFlags.None, out err);
+                                    var sent = buf.Socket.CheckedSend(_directBuf.Buffer, _directBuf.Offset, _directBuf.Size);
                                     if (sent < _directBuf.Size)
                                     {
                                         // The direct buffer could only be partially sent in non-blocking mode.
                                         // Make arrangements to continue writing in the next send
-                                        Contract.Assume(err == SocketError.WouldBlock);
                                         _directBuf.Offset += sent;
                                         _directBuf.Size -= sent;
                                         return;
@@ -651,6 +651,7 @@ namespace Npgsql
 
                     if (msg is ExecuteMessage) {
                         _statementsWritten++;
+                        Console.WriteLine($"Wrote Execute ({_statementsWritten} statements written");
                     }
                 }
             }

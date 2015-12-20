@@ -28,6 +28,7 @@ using System.Diagnostics.Contracts;
 using System.Globalization;
 using System.IO;
 using System.Net;
+using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
@@ -148,5 +149,26 @@ namespace Npgsql
         internal Task AsTask => Task.Delay(TimeLeft);
 
         internal TimeSpan TimeLeft => Expiration - DateTime.Now;
+    }
+
+    static class SocketExtensions
+    {
+        internal static int CheckedSend(this Socket socket, byte[] buffer, int offset, int size)
+        {
+            SocketError err;
+            var sent = socket.Send(buffer, offset, size, SocketFlags.None, out err);
+            switch (err)
+            {
+            case SocketError.Success:
+                Contract.Assume(sent == size);
+                break;
+            case SocketError.WouldBlock:
+                Contract.Assume(sent < size);
+                break;
+            default:
+                throw new SocketException((int)err);
+            }
+            return sent;
+        }
     }
 }

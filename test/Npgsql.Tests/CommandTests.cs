@@ -136,13 +136,26 @@ namespace Npgsql.Tests
         [Test, IssueLink("https://github.com/npgsql/npgsql/issues/641")]
         public void MultipleStatementsNoDeadlock()
         {
-            var conn = new NpgsqlConnection("Host=mammoth;Database=npgsql_tests;Username=npgsql_tests;Password=npgsql_tests");
+            var conn = new NpgsqlConnection("Host=mammoth;Database=npgsql_tests;Username=npgsql_tests;Password=npgsql_tests;CommandTimeout=0");
             conn.Open();
             var data = new byte[1024 * 1024 * 20];
-            using (var cmd = new NpgsqlCommand("SELECT @p; SELECT @p", conn))
+            //var data = new byte[10];
+            //using (var cmd = new NpgsqlCommand("SELECT @p; SELECT @p", conn))
+            using (var cmd = new NpgsqlCommand("SELECT @p", conn))
             {
                 cmd.Parameters.AddWithValue("p", data);
-                cmd.ExecuteNonQuery();
+                //cmd.ExecuteNonQuery();
+                var sw = Stopwatch.StartNew();
+                using (var reader = cmd.ExecuteReader())
+                {
+                    Console.WriteLine($"Completed ExecuteReader in {sw.ElapsedMilliseconds}ms");
+                    Assert.That(reader.Read(), Is.True);
+                    Assert.That(reader[0], Is.EqualTo(data));
+                    //Assert.That(reader.NextResult(), Is.True);
+                    //Assert.That(reader.Read(), Is.True);
+                    //Assert.That(reader[0], Is.EqualTo(data));
+                }
+                Console.WriteLine($"Disposed reader in {sw.ElapsedMilliseconds}ms");
             }
         }
 
