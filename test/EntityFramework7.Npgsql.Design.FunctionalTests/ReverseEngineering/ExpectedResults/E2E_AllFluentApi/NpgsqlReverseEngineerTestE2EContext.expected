@@ -172,6 +172,8 @@ namespace E2ETest.Namespace
             modelBuilder.Entity<SpecialTypes>(entity =>
             {
                 entity.Property(e => e.SpecialTypesID).ValueGeneratedNever();
+
+                entity.Property(e => e.Cidr).HasColumnType("cidr");
             });
 
             modelBuilder.Entity<Test_Spaces_Keywords_Table>(entity =>

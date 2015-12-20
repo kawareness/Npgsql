@@ -8,6 +8,7 @@ namespace E2ETest.Namespace
     public partial class SpecialTypes
     {
         public int SpecialTypesID { get; set; }
+        public NpgsqlInet? Cidr { get; set; }
         public IPAddress IpAddress { get; set; }
         public PhysicalAddress MacAddress { get; set; }
     }
