@@ -235,14 +235,21 @@ namespace Npgsql
 
         #region Reusable Message Objects
 
+        // Backend
         readonly CommandCompleteMessage      _commandCompleteMessage      = new CommandCompleteMessage();
         readonly ReadyForQueryMessage        _readyForQueryMessage        = new ReadyForQueryMessage();
         readonly ParameterDescriptionMessage _parameterDescriptionMessage = new ParameterDescriptionMessage();
         readonly DataRowSequentialMessage    _dataRowSequentialMessage    = new DataRowSequentialMessage();
         readonly DataRowNonSequentialMessage _dataRowNonSequentialMessage = new DataRowNonSequentialMessage();
 
+        // Frontend
+        internal ParseMessage    ParseMessage    { get; } = new ParseMessage();
+        internal BindMessage     BindMessage     { get; } = new BindMessage();
+        internal DescribeMessage DescribeMessage { get; } = new DescribeMessage();
+        internal ExecuteMessage  ExecuteMessage  { get; } = new ExecuteMessage();
+
         // Since COPY is rarely used, allocate these lazily
-        CopyInResponseMessage  _copyInResponseMessage;
+        CopyInResponseMessage _copyInResponseMessage;
         CopyOutResponseMessage _copyOutResponseMessage;
         CopyDataMessage        _copyDataMessage;
 

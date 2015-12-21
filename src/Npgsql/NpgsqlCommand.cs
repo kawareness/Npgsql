@@ -87,9 +87,6 @@ namespace Npgsql
         /// </summary>
         int _prepareConnectionOpenId;
 
-        readonly List<MessageBundle> _messagePool = new List<MessageBundle>();
-        readonly Queue<FrontendMessage> _messageChain = new Queue<FrontendMessage>();
-
         static readonly NpgsqlLogger Log = NpgsqlLogManager.GetCurrentClassLogger();
 
         #endregion Fields
@@ -319,7 +316,7 @@ namespace Npgsql
         /// </summary>
         public bool AllResultTypesAreUnknown
         {
-            private get { return _allResultTypesAreUnknown; }
+            get { return _allResultTypesAreUnknown; }
             set
             {
                 // TODO: Check that this isn't modified after calling prepare
@@ -344,7 +341,7 @@ namespace Npgsql
         /// </remarks>
         public bool[] UnknownResultTypeList
         {
-            private get { return _unknownResultTypeList; }
+            get { return _unknownResultTypeList; }
             set
             {
                 // TODO: Check that this isn't modified after calling prepare
@@ -434,6 +431,8 @@ namespace Npgsql
         /// </summary>
         public override void Prepare()
         {
+            throw new NotImplementedException();
+#if NO
             Prechecks();
             if (Parameters.Any(p => !p.IsTypeExplicitlySet)) {
                 throw new InvalidOperationException("NpgsqlCommand.Prepare method requires all parameters to have an explicitly set type.");
@@ -484,6 +483,7 @@ namespace Npgsql
                 _connector.ReadExpecting<ReadyForQueryMessage>();
                 IsPrepared = true;
             }
+#endif
         }
 
         void DeallocatePrepared()
@@ -564,6 +564,7 @@ namespace Npgsql
 
         #region Frontend message creation
 
+        // TODO: Name no longer relevant, rename/refactor
         void ValidateAndCreateMessages(CommandBehavior behavior = CommandBehavior.Default)
         {
             _connector = Connection.Connector;
@@ -576,6 +577,9 @@ namespace Npgsql
                 p.ValidateAndGetLength();
             }
 
+            if (!_commandTextParsed)
+                ProcessRawQuery();
+
             // For prepared SchemaOnly queries, we already have the RowDescriptions from the Prepare phase.
             // No need to send anything
             if (IsPrepared && (behavior & CommandBehavior.SchemaOnly) != 0) {
@@ -587,34 +591,15 @@ namespace Npgsql
             // If needed, prepend a "SET statement_timeout" message to set the backend timeout
             _connector.PrependBackendTimeoutMessage(CommandTimeout);
 
-            // Create actual messages depending on scenario
-            if ((behavior & CommandBehavior.SchemaOnly) == 0)
-            {
-                CreateMessageChain(behavior);
-            }
-            else
-            {
-                CreateMessagesSchemaOnly(behavior);
-            }
-            /*
-            if (IsPrepared) {
-                CreateMessagesPrepared(behavior);
-            } else {
-                if ((behavior & CommandBehavior.SchemaOnly) == 0) {
-                    CreateMessagesNonPrepared(behavior);
-                } else {
-                    CreateMessagesSchemaOnly(behavior);
-                }
-            }*/
+            if ((behavior & CommandBehavior.SchemaOnly) != 0)
+                throw new NotImplementedException();
         }
 
+#if NO
         void CreateMessageChain(CommandBehavior behavior)
         {
             Contract.Requires((behavior & CommandBehavior.SchemaOnly) == 0);
 
-            if (!_commandTextParsed) {
-                ProcessRawQuery();
-            }
             EnsureMessagePoolCapacity(_statements.Count);
             for (var i = 0; i < _statements.Count; i++)
             {
@@ -669,6 +654,7 @@ namespace Npgsql
             _connector.AddMessage(SyncMessage.Instance);
         }
 
+#endif
         #endregion
 
         #region Execute
@@ -681,7 +667,7 @@ namespace Npgsql
             try
             {
                 _connector.SendAllMessages();
-                var reader = new NpgsqlDataReader(this, behavior, _messageChain, _statements);
+                var reader = new NpgsqlDataReader(this, behavior, _statements);
                 _connector.CurrentReader = reader;
                 reader.NextResult();
                 return reader;
@@ -739,9 +725,8 @@ namespace Npgsql
             {
                 ValidateAndCreateMessages();
                 NpgsqlDataReader reader;
-                using (reader = Execute())
-                {
-                    while (reader.NextResult()) {}
+                using (reader = Execute()) {
+                    reader.Consume();
                 }
                 return reader.RecordsAffected;
             }
@@ -1104,27 +1089,6 @@ namespace Npgsql
             if (Connection == null)
                 throw new InvalidOperationException("Connection property has not been initialized.");
             Connection.CheckReady();
-        }
-
-        void EnsureMessagePoolCapacity(int capacity)
-        {
-            while (_messagePool.Count < capacity)
-            {
-                _messagePool.Add(new MessageBundle {
-                    ParseMessage    = new ParseMessage(),
-                    DescribeMessage = new DescribeMessage(),
-                    BindMessage     = new BindMessage(),
-                    ExecuteMessage  = new ExecuteMessage()
-                });
-            }
-        }
-
-        struct MessageBundle
-        {
-            internal ParseMessage ParseMessage;
-            internal DescribeMessage DescribeMessage;
-            internal BindMessage BindMessage;
-            internal ExecuteMessage ExecuteMessage;
         }
 
         #endregion
