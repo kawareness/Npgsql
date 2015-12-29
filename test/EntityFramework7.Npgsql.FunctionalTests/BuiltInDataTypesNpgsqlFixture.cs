@@ -192,6 +192,9 @@ namespace EntityFramework7.Npgsql.FunctionalTests
         public PhysicalAddress Macaddr { get; set; }
         public NpgsqlPoint Point { get; set; }
 
+        // Array
+        public int[] IntArray { get; set; }
+
         // Composite
         public SomeComposite SomeComposite { get; set; }
     }

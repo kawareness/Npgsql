@@ -22,7 +22,9 @@ CREATE TABLE "AllDataTypes" (
 								            
 	"byteaColumn"       bytea               NULL,
 	"boolColumn"        boolean             NOT NULL,
-	"uuidColumn"        uuid                NULL
+	"uuidColumn"        uuid                NULL,
+
+  "byteaArray"        bytea[]             NOT NULL
 );
 
 DROP TABLE IF EXISTS "PropertyConfiguration";

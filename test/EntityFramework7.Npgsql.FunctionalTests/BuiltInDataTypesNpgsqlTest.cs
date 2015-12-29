@@ -233,6 +233,8 @@ namespace EntityFramework7.Npgsql.FunctionalTests
                         Macaddr = PhysicalAddress.Parse("08-00-2B-01-02-03"),
                         Point = new NpgsqlPoint(5.2, 3.3),
 
+                        IntArray = new []{ 1, 2, 3 },
+
                         SomeComposite = new SomeComposite { SomeNumber = 8, SomeText = "foo" }
                     });
 
@@ -268,8 +270,9 @@ namespace EntityFramework7.Npgsql.FunctionalTests
                 Assert.Equal(PhysicalAddress.Parse("08-00-2B-01-02-03"), entity.Macaddr);
                 Assert.Equal(new NpgsqlPoint(5.2, 3.3), entity.Point);
 
-                Assert.Equal(new SomeComposite { SomeNumber = 8, SomeText = "foo" }, entity.SomeComposite);
+                Assert.Equal(new[] { 1, 2, 3 }, entity.IntArray);
 
+                Assert.Equal(new SomeComposite { SomeNumber = 8, SomeText = "foo" }, entity.SomeComposite);
             }
         }
 

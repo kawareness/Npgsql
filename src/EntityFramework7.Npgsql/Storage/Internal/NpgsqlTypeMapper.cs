@@ -8,6 +8,7 @@ using System.Reflection;
 using Microsoft.Data.Entity.Metadata;
 using Npgsql;
 using Npgsql.TypeHandlers;
+using NpgsqlTypes;
 
 // ReSharper disable once CheckNamespace
 namespace Microsoft.Data.Entity.Storage.Internal
@@ -23,45 +24,69 @@ namespace Microsoft.Data.Entity.Storage.Internal
         public NpgsqlTypeMapper()
         {
             // First, PostgreSQL type name (string) -> RelationalTypeMapping
-            _simpleNameMappings = TypeHandlerRegistry.HandlerTypes.Values
+            _simpleNameMappings =
                 // Base types
+                TypeHandlerRegistry.HandlerTypes.Values
                 .Where(tam => tam.Mapping.NpgsqlDbType.HasValue)
                 .Select(tam => new {
                     Name = tam.Mapping.PgName,
                     Mapping = (RelationalTypeMapping)new NpgsqlTypeMapping(tam.Mapping.PgName, GetTypeHandlerTypeArgument(tam.HandlerType), tam.Mapping.NpgsqlDbType.Value)
                 })
+
+                // Arrays
+                .Concat(TypeHandlerRegistry.HandlerTypes.Values
+                    .Where(tam => tam.Mapping.NpgsqlDbType.HasValue)
+                    .Select(tam => new {
+                        // We shouldn't assume PG array types are simply underscore-prefixed...
+                        // But we have no access to an actual database at this stage in order to check
+                        Name = "_" + tam.Mapping.PgName,
+                        Mapping = (RelationalTypeMapping)new NpgsqlTypeMapping(
+                            "_" + tam.Mapping.PgName,
+                            BAD GetTypeHandlerTypeArgument(tam.HandlerType),
+                            NpgsqlDbType.Array | tam.Mapping.NpgsqlDbType.Value
+                        )
+                    })
+                )
+
                 // Enums
                 //.Concat(TypeHandlerRegistry.GlobalEnumMappings.Select(kv => new {
                 //    Name = kv.Key,
                 //    Mapping = (RelationalTypeMapping)new NpgsqlTypeMapping(kv.Key, ((IEnumHandler)kv.Value).EnumType)
                 //}))
+
                 // Composites
                 .Concat(TypeHandlerRegistry.GlobalCompositeMappings.Select(kv => new {
                     Name = kv.Key,
                     Mapping = (RelationalTypeMapping)new NpgsqlTypeMapping(kv.Key, ((ICompositeHandler)kv.Value).CompositeType)
                 }))
+
                 // Output
                 .ToDictionary(x => x.Name, x => x.Mapping);
 
             // Second, CLR type -> RelationalTypeMapping
-            _simpleMappings = TypeHandlerRegistry.HandlerTypes.Values
+            _simpleMappings =
+
                 // Base types
+                TypeHandlerRegistry.HandlerTypes.Values
                 .Select(tam => tam.Mapping)
                 .Where(m => m.NpgsqlDbType.HasValue)
                 .SelectMany(m => m.Types, (m, t) => new {
                     Type = t,
                     Mapping = (RelationalTypeMapping)new NpgsqlTypeMapping(m.PgName, t, m.NpgsqlDbType.Value)
                 })
+
                 // Enums
                 //.Concat(TypeHandlerRegistry.GlobalEnumMappings.Select(kv => new {
                 //    Type = ((IEnumHandler)kv.Value).EnumType,
                 //    Mapping = (RelationalTypeMapping)new NpgsqlTypeMapping(kv.Key, ((IEnumHandler)kv.Value).EnumType)
                 //}))
+
                 // Composites
                 .Concat(TypeHandlerRegistry.GlobalCompositeMappings.Select(kv => new {
                     Type = ((ICompositeHandler)kv.Value).CompositeType,
                     Mapping = (RelationalTypeMapping)new NpgsqlTypeMapping(kv.Key, ((ICompositeHandler)kv.Value).CompositeType)
                 }))
+
                 // Output
                 .ToDictionary(x => x.Type, x => x.Mapping);
         }
