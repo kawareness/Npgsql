@@ -152,9 +152,7 @@ namespace Npgsql
         /// </summary>
         internal readonly Dictionary<string, string> BackendParams;
 
-#if NET45 || NET451
         SSPIHandler _sspi;
-#endif
 
         /// <summary>
         /// The timeout for reading messages that are part of the user's command
@@ -745,36 +743,26 @@ namespace Npgsql
                     if (!IntegratedSecurity) {
                         throw new NpgsqlException("GSS authentication but IntegratedSecurity not enabled");
                     }
-#if NET45 || NET451
+
                     // For GSSAPI we have to use the supplied hostname
                     _sspi = new SSPIHandler(Host, KerberosServiceName, true);
                     return new PasswordMessage(_sspi.Continue(null));
-#else
-                    throw new NotSupportedException("SSPI not yet supported in .NET Core");
-#endif
 
                 case AuthenticationRequestType.AuthenticationSSPI:
                     if (!IntegratedSecurity) {
                         throw new NpgsqlException("SSPI authentication but IntegratedSecurity not enabled");
                     }
-#if NET45 || NET451
+
                     _sspi = new SSPIHandler(Host, KerberosServiceName, false);
                     return new PasswordMessage(_sspi.Continue(null));
-#else
-                    throw new NotSupportedException("SSPI not yet supported in .NET Core");
-#endif
 
                 case AuthenticationRequestType.AuthenticationGSSContinue:
-#if NET45 || NET451
                     var passwdRead = _sspi.Continue(((AuthenticationGSSContinueMessage)msg).AuthenticationData);
                     if (passwdRead.Length != 0)
                     {
                         return new PasswordMessage(passwdRead);
                     }
                     return null;
-#else
-                    throw new NotSupportedException("SSPI not yet supported in .NET Core");
-#endif
 
                 default:
                     throw new NotSupportedException($"Authentication method not supported (Received: {msg.AuthRequestType})");
