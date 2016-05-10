@@ -44,6 +44,21 @@ namespace Npgsql.Tests
 {
     public class CommandTests : TestBase
     {
+        [Test]
+        public void Crap()
+        {
+            var csb = new NpgsqlConnectionStringBuilder(ConnectionString)
+            {
+                Database = "postgis2"
+            };
+            using (var conn = OpenConnection(csb))
+            using (var cmd = new NpgsqlCommand("select st_bandpath(rast) from raster_test_table", conn))
+            {
+                //cmd.AllResultTypesAreUnknown = true;
+                Console.WriteLine(cmd.ExecuteScalar());
+            }
+        }
+
         #region Multiple Commands
 
         /// <summary>
