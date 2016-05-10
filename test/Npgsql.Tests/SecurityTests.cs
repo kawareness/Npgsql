@@ -91,6 +91,9 @@ namespace Npgsql.Tests
         }
 
         [Test]
+#if NETCOREAPP1_0
+        [Ignore("Not implemented on CoreCLR yet")]
+#endif
         public void IntegratedSecurity()
         {
             var csb = new NpgsqlConnectionStringBuilder(ConnectionString) {
@@ -114,7 +117,7 @@ namespace Npgsql.Tests
             }
         }
 
-        #region Partial Trust
+#region Partial Trust
 
 #if NET46
         [Test, Description("Makes sure Npgsql works when running under pseudo-medium trust")]
@@ -157,9 +160,9 @@ namespace Npgsql.Tests
             }
         }
 #endif
-        #endregion
+#endregion
 
-        #region Setup / Teardown / Utils
+#region Setup / Teardown / Utils
 
         [SetUp]
         public void CheckSslSupport()
@@ -172,6 +175,6 @@ namespace Npgsql.Tests
             }
         }
 
-        #endregion
+#endregion
     }
 }
