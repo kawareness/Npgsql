@@ -125,7 +125,7 @@ namespace Npgsql.Tests
                 using (var cmd = CreateSleepCommand(conn, 10))
                     Assert.That(() => cmd.ExecuteNonQuery(), Throws.Exception
                         .TypeOf<NpgsqlException>()
-                        .With.InnerException.TypeOf<IOException>()
+                        .With.InnerException.InstanceOf<IOException>()
                     );
 
                 Assert.That(conn.State, Is.EqualTo(ConnectionState.Closed));
@@ -802,7 +802,7 @@ namespace Npgsql.Tests
             using (var conn = OpenConnection())
             {
                 // Make sure messages are in English
-                conn.ExecuteNonQuery(@"SET lc_messages='English_United States.1252'");
+                conn.ExecuteNonQuery(@"SET lc_messages='en_US.UTF8'");
                 conn.ExecuteNonQuery(@"
                         CREATE OR REPLACE FUNCTION pg_temp.emit_notice() RETURNS VOID AS
                         'BEGIN RAISE NOTICE ''testnotice''; END;'
