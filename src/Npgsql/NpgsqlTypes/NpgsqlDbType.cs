@@ -360,6 +360,15 @@ namespace NpgsqlTypes
 
         #endregion
 
+        #region ISN types
+
+        /// <summary>
+        /// 
+        /// </summary>
+        EAN13 = 54,
+
+        #endregion
+
         #region Arrays
 
         /// <summary>

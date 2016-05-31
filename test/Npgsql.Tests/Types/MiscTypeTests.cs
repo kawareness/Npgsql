@@ -719,5 +719,30 @@ namespace Npgsql.Tests.Types
                 Assert.AreEqual(query.ToString(), output.ToString());
             }
         }
+
+        [Test]
+        public void EAN13()
+        {
+            using (var conn = OpenConnection())
+            {
+                conn.ExecuteNonQuery("DROP TABLE IF EXISTS isns");
+                conn.ExecuteNonQuery("CREATE TABLE isns (id INT, data EAN13)");
+                conn.ExecuteNonQuery("INSERT INTO isns (id, data) VALUES (1, (SELECT ean13(upc('220356483481'))))");
+                var data = (long)conn.ExecuteScalar("SELECT data FROM isns");
+
+                using (var cmd = new NpgsqlCommand("INSERT INTO isns (id, data) VALUES (2, @p)", conn))
+                {
+                    cmd.Parameters.AddWithValue("p", NpgsqlDbType.EAN13, data);
+                    cmd.ExecuteNonQuery();
+                }
+
+                /*
+                using (var cmd = new NpgsqlCommand("SELECT ean13(upc('220356483481'))", conn))
+                {
+                    var crap = (long)cmd.ExecuteScalar();
+                    Console.WriteLine(crap);
+                }*/
+            }
+        }
     }
 }
