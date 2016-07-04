@@ -45,7 +45,8 @@ namespace Npgsql.TypeHandlers
     [TypeMapping("refcursor", NpgsqlDbType.Refcursor,          inferredDbType: DbType.String)]
     [TypeMapping("citext",    NpgsqlDbType.Citext,             inferredDbType: DbType.String)]
     [TypeMapping("unknown")]
-    class TextHandler : ChunkingTypeHandler<string>, IChunkingTypeHandler<char[]>, ITextReaderHandler
+    class TextHandler : ChunkingTypeHandler<string>, IChunkingTypeHandler<char[]>, IChunkingTypeHandler<char>,
+        ITextReaderHandler
     {
         internal override bool PreferTextWrite => true;
 
@@ -57,6 +58,7 @@ namespace Npgsql.TypeHandlers
         int _byteLen, _charLen, _bytePos, _charPos;
         ReadBuffer _readBuf;
         WriteBuffer _writeBuf;
+        FieldDescription _fieldDescription;
 
         readonly char[] _singleCharArray = new char[1];
 
@@ -71,6 +73,7 @@ namespace Npgsql.TypeHandlers
             _readBuf = buf;
             _byteLen = len;
             _bytePos = -1;
+            _fieldDescription = fieldDescription;
         }
 
         public override bool Read([CanBeNull] out string result)
@@ -81,7 +84,7 @@ namespace Npgsql.TypeHandlers
                 {
                     // Already have the entire string in the buffer, decode and return
                     result = _readBuf.ReadString(_byteLen);
-                    _readBuf = null;
+                    ResetRead();
                     return true;
                 }
 
@@ -108,8 +111,7 @@ namespace Npgsql.TypeHandlers
             }
 
             result = _readBuf.TextEncoding.GetString(_tempBuf);
-            _tempBuf = null;
-            _readBuf = null;
+            ResetRead();
             return true;
         }
 
@@ -121,7 +123,7 @@ namespace Npgsql.TypeHandlers
                 {
                     // Already have the entire string in the buffer, decode and return
                     result = _readBuf.ReadChars(_byteLen);
-                    _readBuf = null;
+                    ResetRead();
                     return true;
                 }
 
@@ -148,8 +150,31 @@ namespace Npgsql.TypeHandlers
             }
 
             result = _readBuf.TextEncoding.GetChars(_tempBuf);
-            _tempBuf = null;
-            _readBuf = null;
+            ResetRead();
+            return true;
+        }
+
+        public bool Read([CanBeNull] out char result)
+        {
+            if (_fieldDescription == null || _fieldDescription.TypeModifier != 5)
+            {
+                string skip;
+                if (!Read(out skip))
+                {
+                    result = default(char);
+                    return false;
+                }
+                throw new SafeReadException(new InvalidCastException("Only columns of type char(1) can be read as char"));
+            }
+
+            char[] chars;
+            if (!Read(out chars))
+            {
+                result = default(char);
+                return false;
+            }
+            Debug.Assert(chars.Length == 1);
+            result = chars[0];
             return true;
         }
 
@@ -195,6 +220,13 @@ namespace Npgsql.TypeHandlers
             row.PosInColumn += bytesRead;
             _charPos += charsRead;
             return charsRead;
+        }
+
+        void ResetRead()
+        {
+            _tempBuf = null;
+            _readBuf = null;
+            _fieldDescription = null;
         }
 
         #endregion

@@ -369,11 +369,11 @@ namespace Npgsql.Tests.Types
         }
 
         [Test]
-        public void Char()
+        public void TextAsChar()
         {
             var expected = 'f';
             using (var conn = OpenConnection())
-            using (var cmd = new NpgsqlCommand("SELECT @p", conn))
+            using (var cmd = new NpgsqlCommand("SELECT @p::TEXT", conn))
             {
                 cmd.Parameters.AddWithValue("p", expected);
                 using (var reader = cmd.ExecuteReader())
@@ -381,6 +381,23 @@ namespace Npgsql.Tests.Types
                     reader.Read();
                     Assert.That(reader.GetString(0), Is.EqualTo(expected.ToString()));
                     Assert.That(() => reader.GetChar(0), Throws.Exception.TypeOf<InvalidCastException>());
+                }
+            }
+        }
+
+        [Test]
+        public void Char1()
+        {
+            var expected = 'f';
+            using (var conn = OpenConnection())
+            using (var cmd = new NpgsqlCommand("SELECT @p::CHAR(1)", conn))
+            {
+                cmd.Parameters.AddWithValue("p", expected);
+                using (var reader = cmd.ExecuteReader())
+                {
+                    reader.Read();
+                    Assert.That(reader.GetChar(0), Is.EqualTo(expected));
+                    Assert.That(reader.GetString(0), Is.EqualTo(expected.ToString()));
                 }
             }
         }
