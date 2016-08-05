@@ -23,6 +23,7 @@ namespace Npgsql
 
         /// <summary>
         /// Specifies the type of query, e.g. SELECT.
+        /// Set when the statement completes execution.
         /// </summary>
         public StatementType StatementType { get; internal set; }
 
@@ -41,7 +42,10 @@ namespace Npgsql
         /// </summary>
         public uint OID { get; internal set; }
 
-        internal List<NpgsqlParameter> InputParameters { get; } = new List<NpgsqlParameter>();
+        /// <summary>
+        /// The list of input parameters to be sent to the database with this statement.
+        /// </summary>
+        public List<NpgsqlParameter> InputParameters { get; } = new List<NpgsqlParameter>();
 
         /// <summary>
         /// The RowDescription message for this query. If null, the query does not return rows (e.g. INSERT)
@@ -57,6 +61,19 @@ namespace Npgsql
         /// Whether this statement has already been prepared.
         /// </summary>
         internal bool IsPrepared;
+
+        /// <summary>
+        /// Creates a new SQL statement for execution with an <see cref="NpgsqlRawCommand"/>.
+        /// </summary>
+        public NpgsqlStatement() {}
+
+        /// <summary>
+        /// Creates a new SQL statement for execution with an <see cref="NpgsqlRawCommand"/>.
+        /// </summary>
+        public NpgsqlStatement(string sql)
+        {
+            SQL = sql;
+        }
 
         internal void Reset()
         {

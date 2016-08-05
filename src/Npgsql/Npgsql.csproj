@@ -86,12 +86,14 @@
     <Compile Include="Logging\NpgsqlLogManager.cs" />
     <Compile Include="Logging\NpgsqlLogLevel.cs" />
     <Compile Include="NameTranslation\NpgsqlNullNameTranslator.cs" />
+    <Compile Include="NpgsqlCommand.cs" />
     <Compile Include="NpgsqlException.cs" />
     <Compile Include="NpgsqlLargeObjectManager.cs" />
     <Compile Include="NpgsqlLargeObjectStream.cs" />
     <Compile Include="NpgsqlBinaryExporter.cs" />
     <Compile Include="NpgsqlBinaryImporter.cs" />
     <Compile Include="Counters.cs" />
+    <Compile Include="NpgsqlRawCommand.cs" />
     <Compile Include="PgPassFile.cs" />
     <Compile Include="PostgresNotice.cs" />
     <Compile Include="NpgsqlRawCopyStream.cs" />
@@ -173,7 +175,7 @@
     <Compile Include="NpgsqlTypes\NpgsqlTypes.cs" />
     <Compile Include="CachedValue.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <Compile Include="NpgsqlCommand.cs" />
+    <Compile Include="NpgsqlCommandBase.cs" />
     <Compile Include="NpgsqlCommandBuilder.cs" />
     <Compile Include="NpgsqlConnection.cs" />
     <Compile Include="NpgsqlConnectionStringBuilder.cs" />

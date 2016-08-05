@@ -54,7 +54,7 @@ namespace Npgsql
         , IDbColumnSchemaGenerator
 #endif
     {
-        internal NpgsqlCommand Command { get; }
+        internal NpgsqlCommandBase Command { get; }
         readonly NpgsqlConnector _connector;
         readonly NpgsqlConnection _connection;
         readonly CommandBehavior _behavior;
@@ -114,7 +114,7 @@ namespace Npgsql
 
         static readonly NpgsqlLogger Log = NpgsqlLogManager.GetCurrentClassLogger();
 
-        internal NpgsqlDataReader(NpgsqlCommand command, CommandBehavior behavior, List<NpgsqlStatement> statements)
+        internal NpgsqlDataReader(NpgsqlCommandBase command, CommandBehavior behavior, List<NpgsqlStatement> statements)
         {
             Command = command;
             _connection = command.Connection;

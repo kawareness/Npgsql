@@ -56,6 +56,7 @@
     <Compile Include="PgPassEntryTests.cs" />
     <Compile Include="PgPassFileTests.cs" />
     <Compile Include="WriteBufferTests.cs" />
+    <Compile Include="RawCommandTests.cs" />
     <Compile Include="ReaderNewSchemaTests.cs" />
     <Compile Include="ReaderOldSchemaTests.cs" />
     <Compile Include="SchemaTests.cs" />

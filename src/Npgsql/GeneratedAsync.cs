@@ -210,15 +210,11 @@ using System.Threading.Tasks;
 
 namespace Npgsql
 {
-    public sealed partial class NpgsqlCommand
+    public abstract partial class NpgsqlCommandBase
     {
-        async Task<NpgsqlDataReader> ExecuteAsync(CancellationToken cancellationToken, CommandBehavior behavior = CommandBehavior.Default)
+        protected virtual async Task<NpgsqlDataReader> ExecuteAsync(CancellationToken cancellationToken, CommandBehavior behavior = CommandBehavior.Default)
         {
             ValidateParameters();
-            if (!IsPrepared)
-                ProcessRawQuery();
-            if (Statements.Any(s => s.InputParameters.Count > 65535))
-                throw new Exception("A statement cannot have more than 65535 parameters");
             LogCommand();
             State = CommandState.InProgress;
             try

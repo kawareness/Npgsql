@@ -17,6 +17,7 @@ namespace Npgsql.Benchmarks
         readonly NpgsqlCommand _executeNonQueryCmd;
         readonly NpgsqlCommand _executeNonQueryWithParamCmd;
         readonly NpgsqlCommand _executeNonQueryPreparedCmd;
+        readonly NpgsqlRawCommand _executeNonQueryRawCmd;
         readonly NpgsqlCommand _executeScalarCmd;
         readonly NpgsqlCommand _executeReaderCmd;
 
@@ -28,6 +29,7 @@ namespace Npgsql.Benchmarks
             _executeNonQueryWithParamCmd.Parameters.AddWithValue("not_used", DBNull.Value);
             _executeNonQueryPreparedCmd = new NpgsqlCommand("SET lock_timeout = 1000", conn);
             _executeNonQueryPreparedCmd.Prepare();
+            _executeNonQueryRawCmd = new NpgsqlRawCommand("SET lock_timeout = 1000", conn);
             _executeScalarCmd = new NpgsqlCommand("SELECT 1", conn);
             _executeReaderCmd   = new NpgsqlCommand("SELECT 1", conn);
         }
@@ -40,6 +42,9 @@ namespace Npgsql.Benchmarks
 
         [Benchmark]
         public int ExecuteNonQueryPrepared() => _executeNonQueryPreparedCmd.ExecuteNonQuery();
+
+        [Benchmark]
+        public int ExecuteNonQueryRaw() => _executeNonQueryRawCmd.ExecuteNonQuery();
 
         [Benchmark]
         public object ExecuteScalar() => _executeScalarCmd.ExecuteScalar();

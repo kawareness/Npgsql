@@ -135,7 +135,7 @@ namespace Npgsql
         }
 
         /// <remarks>
-        /// This is a hack, see explanation in <see cref="NpgsqlCommand.Send"/>.
+        /// This is a hack, see explanation in <see cref="NpgsqlCommandBase.Send"/>.
         /// </remarks>
         internal async Task FlushAsyncWithSyncContext(CancellationToken cancellationToken)
         {
@@ -186,7 +186,7 @@ namespace Npgsql
         }
 
         /// <remarks>
-        /// This is a hack, see explanation in <see cref="NpgsqlCommand.Send"/>.
+        /// This is a hack, see explanation in <see cref="NpgsqlCommandBase.Send"/>.
         /// </remarks>
         internal async Task DirectWriteAsyncWithSyncContext(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {

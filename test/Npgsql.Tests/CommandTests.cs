@@ -495,6 +495,8 @@ namespace Npgsql.Tests
             {
                 conn.ExecuteNonQuery("");
                 conn.ExecuteNonQuery(";");
+                using (var rawCmd = new NpgsqlRawCommand(conn))
+                    rawCmd.ExecuteNonQuery();
             }
         }
 
