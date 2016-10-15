@@ -78,12 +78,12 @@ namespace Npgsql
         /// </summary>
         public IReadOnlyList<NpgsqlStatement> Statements => _statements.AsReadOnly();
 
-        int _writeStatementIndex;
-
+        /*
         /// <summary>
         /// If part of the send happens asynchronously (see <see cref="SendRemaining"/>,
         /// the Task for that remaining send is stored here.
         /// </summary>
+        */
         internal Task RemainingSendTask;
 
         UpdateRowSource _updateRowSource = UpdateRowSource.Both;
@@ -396,8 +396,6 @@ namespace Npgsql
             }
         }
 
-        SendState _sendState;
-
         #endregion State management
 
         #region Parameters
@@ -474,9 +472,6 @@ namespace Npgsql
 
             using (_connector.StartUserAction())
             {
-                _sendState = SendState.Start;
-                _writeStatementIndex = 0;
-
                 Debug.Assert(Statements.All(s => !s.IsPrepared));
 
                 var needToPrepare = false;
@@ -509,7 +504,7 @@ namespace Npgsql
 
                 if (needToPrepare)
                 {
-                    Send(PopulateParseDescribe);
+                    SendParseDescribe(false, CancellationToken.None).Wait();
 
                     // Loop over statements, skipping those that are already prepared (because they were persisted)
                     var isFirst = true;
@@ -603,8 +598,7 @@ namespace Npgsql
             _connector = CheckReadyAndGetConnector();
             using (_connector.StartUserAction())
             {
-                _writeStatementIndex = 0;
-                Send(PopulateClose);
+                SendClose(false, CancellationToken.None).Wait();
                 foreach (var statement in Statements)
                 {
                     _connector.ReadExpecting<CloseCompletedMessage>();
@@ -717,8 +711,7 @@ namespace Npgsql
             }
         }
 
-        [RewriteAsync]
-        NpgsqlDataReader Execute(CommandBehavior behavior = CommandBehavior.Default)
+        async Task<NpgsqlDataReader> Execute(CommandBehavior behavior, bool async, CancellationToken cancellationToken)
         {
             ValidateParameters();
             if (!IsPrepared)
@@ -742,19 +735,19 @@ namespace Npgsql
                 {
                     _connector.UserTimeout = CommandTimeout * 1000;
 
-                    _sendState = SendState.Start;
-                    _writeStatementIndex = 0;
-
                     if (IsPrepared)
-                        Send(PopulateExecutePrepared);
+                        await SendExecutePrepared(async, cancellationToken);
                     else if ((behavior & CommandBehavior.SchemaOnly) == 0)
-                        Send(PopulateExecuteNonPrepared);
+                        await SendExecuteNonPrepared(async, cancellationToken);
                     else
-                        Send(PopulateParseDescribe);
+                        await SendParseDescribe(async, cancellationToken);
                 }
 
                 var reader = new NpgsqlDataReader(this, behavior, _statements);
-                reader.NextResult();
+                if (async)
+                    await reader.NextResultAsync(cancellationToken);
+                else
+                    reader.NextResult();
                 _connector.CurrentReader = reader;
                 return reader;
             }
@@ -769,6 +762,8 @@ namespace Npgsql
 
         #region Send
 
+
+#if OLD
         delegate bool PopulateMethod(ref DirectBuffer directBuf);
 
         [RewriteAsync]
@@ -856,7 +851,7 @@ namespace Npgsql
                 Log.Error("Exception while asynchronously sending remaining messages", e, _connector.Id);
             }
         }
-
+#endif
         /// <summary>
         /// Waits until any background async send task completes.
         /// </summary>
@@ -880,67 +875,37 @@ namespace Npgsql
         /// true whether all messages could be populated in the buffer, false otherwise (method needs to be
         /// called again)
         /// </returns>
-        bool PopulateExecuteNonPrepared(ref DirectBuffer directBuf)
+        async Task SendExecuteNonPrepared(bool async, CancellationToken cancellationToken)
         {
             Debug.Assert(_connector != null);
 
             var buf = _connector.WriteBuffer;
-            for (; _writeStatementIndex < _statements.Count; _writeStatementIndex++)
+            for (var i = 0; i < _statements.Count; i++)
             {
-                var statement = _statements[_writeStatementIndex];
-                switch (_sendState)
-                {
-                case SendState.Start:
-                    _connector.ParseMessage.Populate(statement, _connector.TypeHandlerRegistry);
-                    _sendState = SendState.Parse;
-                    goto case SendState.Parse;
+                var statement = _statements[i];
 
-                case SendState.Parse:
-                    if (!_connector.ParseMessage.Write(buf))
-                        return false;
-                    var bind = _connector.BindMessage;
-                    bind.Populate(statement.InputParameters);
-                    if (AllResultTypesAreUnknown)
-                        bind.AllResultTypesAreUnknown = AllResultTypesAreUnknown;
-                    else if (_writeStatementIndex == 0 && UnknownResultTypeList != null)
-                        bind.UnknownResultTypeList = UnknownResultTypeList;
-                    _sendState = SendState.Bind;
-                    goto case SendState.Bind;
+                await _connector.ParseMessage
+                    .Populate(statement, _connector.TypeHandlerRegistry)
+                    .Write(buf, async, cancellationToken);
 
-                case SendState.Bind:
-                    if (!_connector.BindMessage.Write(buf, ref directBuf))
-                        return false;
-                    var describe = _connector.DescribeMessage;
-                    describe.Populate(StatementOrPortal.Portal);
-                    _sendState = SendState.Describe;
-                    goto case SendState.Describe;
+                var bind = _connector.BindMessage;
+                bind.Populate(statement.InputParameters);
+                if (AllResultTypesAreUnknown)
+                    bind.AllResultTypesAreUnknown = AllResultTypesAreUnknown;
+                else if (i == 0 && UnknownResultTypeList != null)
+                    bind.UnknownResultTypeList = UnknownResultTypeList;
+                await _connector.BindMessage.Write(buf, async, cancellationToken);
 
-                case SendState.Describe:
-                    describe = _connector.DescribeMessage;
-                    if (describe.Length > buf.WriteSpaceLeft)
-                        return false;
-                    describe.WriteFully(buf);
-                    var execute = _connector.ExecuteMessage;
-                    execute.Populate();
-                    _sendState = SendState.Execute;
-                    goto case SendState.Execute;
+                await _connector.DescribeMessage
+                    .Populate(StatementOrPortal.Portal)
+                    .Write(buf, async, cancellationToken);
 
-                case SendState.Execute:
-                    execute = _connector.ExecuteMessage;
-                    if (execute.Length > buf.WriteSpaceLeft)
-                        return false;
-                    execute.WriteFully(buf);
-                    _sendState = SendState.Start;
-                    continue;
-
-                default:
-                    throw new ArgumentOutOfRangeException($"Invalid state {_sendState} in {nameof(PopulateExecuteNonPrepared)}");
-                }
+                await _connector.ExecuteMessage
+                    .Populate()
+                    .Write(buf, async, cancellationToken);
             }
-            if (SyncMessage.Instance.Length > buf.WriteSpaceLeft)
-                return false;
-            SyncMessage.Instance.WriteFully(buf);
-            return true;
+            await SyncMessage.Instance.Write(buf, async, cancellationToken);
+            await buf.Flush(async, cancellationToken);
         }
 
         /// <summary>
@@ -950,111 +915,67 @@ namespace Npgsql
         /// true whether all messages could be populated in the buffer, false otherwise (method needs to be
         /// called again)
         /// </returns>
-        bool PopulateExecutePrepared(ref DirectBuffer directBuf)
+        async Task SendExecutePrepared(bool async, CancellationToken cancellationToken)
         {
             Debug.Assert(_connector != null);
 
             var buf = _connector.WriteBuffer;
-            for (; _writeStatementIndex < _statements.Count; _writeStatementIndex++)
+            for (var i = 0; i < _statements.Count; i++)
             {
-                var statement = _statements[_writeStatementIndex];
-                switch (_sendState)
-                {
-                case SendState.Start:
-                    var bind = _connector.BindMessage;
-                    bind.Populate(statement.InputParameters, "", statement.PreparedStatementName);
-                    if (AllResultTypesAreUnknown)
-                        bind.AllResultTypesAreUnknown = AllResultTypesAreUnknown;
-                    else if (_writeStatementIndex == 0 && UnknownResultTypeList != null)
-                        bind.UnknownResultTypeList = UnknownResultTypeList;
-                    _sendState = SendState.Bind;
-                    goto case SendState.Bind;
+                var statement = _statements[i];
 
-                case SendState.Bind:
-                    if (!_connector.BindMessage.Write(buf, ref directBuf))
-                        return false;
-                    var execute = _connector.ExecuteMessage;
-                    execute.Populate();
-                    _sendState = SendState.Execute;
-                    goto case SendState.Execute;
+                var bind = _connector.BindMessage;
+                bind.Populate(statement.InputParameters, "", statement.PreparedStatementName);
+                if (AllResultTypesAreUnknown)
+                    bind.AllResultTypesAreUnknown = AllResultTypesAreUnknown;
+                else if (i == 0 && UnknownResultTypeList != null)
+                    bind.UnknownResultTypeList = UnknownResultTypeList;
+                await _connector.BindMessage.Write(buf, async, cancellationToken);
 
-                case SendState.Execute:
-                    execute = _connector.ExecuteMessage;
-                    if (execute.Length > buf.WriteSpaceLeft)
-                        return false;
-                    execute.WriteFully(buf);
-                    _sendState = SendState.Start;
-                    continue;
-
-                default:
-                    throw new ArgumentOutOfRangeException($"Invalid state {_sendState} in {nameof(PopulateExecutePrepared)}");
-                }
+                await _connector.ExecuteMessage
+                    .Populate()
+                    .Write(buf, async, cancellationToken);
             }
-            if (SyncMessage.Instance.Length > buf.WriteSpaceLeft)
-                return false;
-            SyncMessage.Instance.WriteFully(buf);
-            return true;
+            await SyncMessage.Instance.Write(buf, async, cancellationToken);
+            await buf.Flush(async, cancellationToken);
         }
 
-        bool PopulateParseDescribe(ref DirectBuffer directBuf)
+        async Task SendParseDescribe(bool async, CancellationToken cancellationToken)
         {
             Debug.Assert(_connector != null);
 
             var buf = _connector.WriteBuffer;
-            for (; _writeStatementIndex < _statements.Count; _writeStatementIndex++)
+            foreach (var statement in _statements)
             {
-                var statement = _statements[_writeStatementIndex];
-
                 // Statement doesn't need preparation (persistent)
                 if (statement.IsPrepared)
                     continue;
 
-                switch (_sendState)
-                {
-                case SendState.Start:
-                    _connector.ParseMessage.Populate(statement, _connector.TypeHandlerRegistry);
-                    _sendState = SendState.Parse;
-                    goto case SendState.Parse;
+                await _connector.ParseMessage
+                    .Populate(statement, _connector.TypeHandlerRegistry)
+                    .Write(buf, async, cancellationToken);
 
-                case SendState.Parse:
-                    if (!_connector.ParseMessage.Write(buf))
-                        return false;
-                    var describe = _connector.DescribeMessage;
-                    describe.Populate(StatementOrPortal.Statement, statement.PreparedStatementName);
-                    _sendState = SendState.Describe;
-                    goto case SendState.Describe;
-
-                case SendState.Describe:
-                    describe = _connector.DescribeMessage;
-                    if (!describe.Write(buf))
-                        return false;
-                    _sendState = SendState.Start;
-                    continue;
-
-                default:
-                    throw new ArgumentOutOfRangeException($"Invalid state {_sendState} in {nameof(PopulateParseDescribe)}");
-                }
+                await _connector.DescribeMessage
+                    .Populate(StatementOrPortal.Statement, statement.PreparedStatementName)
+                    .Write(buf, async, cancellationToken);
             }
-            if (!SyncMessage.Instance.Write(buf))
-                return false;
-            return true;
+            await SyncMessage.Instance.Write(buf, async, cancellationToken);
+            await buf.Flush(async, cancellationToken);
         }
 
-        bool PopulateClose(ref DirectBuffer directBuf)
+        async Task SendClose(bool async, CancellationToken cancellationToken)
         {
             Debug.Assert(_connector != null);
 
             var buf = _connector.WriteBuffer;
-            for (; _writeStatementIndex < _statements.Count; _writeStatementIndex++)
+            foreach (var statement in _statements)
             {
-                var statement = _statements[_writeStatementIndex];
-                var closeMsg = _connector.CloseMessage.Populate(StatementOrPortal.Statement, statement.PreparedStatementName);
-                if (!closeMsg.Write(buf))
-                    return false;
+                await _connector.CloseMessage
+                    .Populate(StatementOrPortal.Statement, statement.PreparedStatementName)
+                    .Write(buf, async, cancellationToken);
             }
-            if (!SyncMessage.Instance.Write(buf))
-                return false;
-            return true;
+            await SyncMessage.Instance.Write(buf, async, cancellationToken);
+            await buf.Flush(async, cancellationToken);
         }
 
         #endregion
@@ -1065,10 +986,10 @@ namespace Npgsql
         /// Executes a SQL statement against the connection and returns the number of rows affected.
         /// </summary>
         /// <returns>The number of rows affected if known; -1 otherwise.</returns>
-        public override int ExecuteNonQuery() => ExecuteNonQueryInternal();
+        public override int ExecuteNonQuery() => ExecuteNonQuery(false, CancellationToken.None).GetAwaiter().GetResult();
 
         /// <summary>
-        /// Asynchronous version of <see cref="ExecuteNonQuery"/>
+        /// Asynchronous version of <see cref="ExecuteNonQuery()"/>
         /// </summary>
         /// <param name="cancellationToken">The token to monitor for cancellation requests.</param>
         /// <returns>A task representing the asynchronous operation, with the number of rows affected if known; -1 otherwise.</returns>
@@ -1077,12 +998,11 @@ namespace Npgsql
             cancellationToken.ThrowIfCancellationRequested();
             using (NoSynchronizationContextScope.Enter())
             using (cancellationToken.Register(Cancel))
-                return await ExecuteNonQueryInternalAsync(cancellationToken);
+                return await ExecuteNonQuery(true, cancellationToken);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [RewriteAsync]
-        int ExecuteNonQueryInternal()
+        async Task<int> ExecuteNonQuery(bool async, CancellationToken cancellationToken)
         {
             var connector = CheckReadyAndGetConnector();
             using (connector.StartUserAction(this))
@@ -1092,18 +1012,18 @@ namespace Npgsql
                 // Optimization: unprepared unparameterized non-queries can go through the PostgreSQL
                 // simple protocol which is more efficient
                 if (!IsPrepared && Parameters.Count == 0)
-                    return ExecuteSimple();
+                    return await ExecuteSimple(async, cancellationToken); // TODO
 
-                using (var reader = Execute())
+                using (var reader = await Execute(CommandBehavior.Default, async, cancellationToken))
                 {
-                    while (reader.NextResult()) {}
+                    while (async ? await reader.NextResultAsync(cancellationToken) : reader.NextResult()) {}
                     reader.Close();
                     return reader.RecordsAffected;
                 }
             }
         }
 
-        int ExecuteSimple()
+        async Task<int> ExecuteSimple(bool async, CancellationToken cancellationToken)
         {
             ProcessRawQuery();
             LogCommand();
@@ -1118,11 +1038,10 @@ namespace Npgsql
 
             try
             {
-                var queryMessage = connector.QueryMessage;
-                queryMessage.Populate(CommandText);
-                while (!queryMessage.Write(connector.WriteBuffer))
-                    connector.SendBuffer();
-                connector.SendBuffer();
+                await connector.QueryMessage
+                    .Populate(CommandText)
+                    .Write(connector.WriteBuffer, async, cancellationToken);
+                await connector.WriteBuffer.Flush(async, cancellationToken);
 
                 var statementIndex = 0;
                 var recordsAffected = 0;
@@ -1163,32 +1082,32 @@ namespace Npgsql
         /// <returns>The first column of the first row in the result set,
         /// or a null reference if the result set is empty.</returns>
         [CanBeNull]
-        public override object ExecuteScalar() => ExecuteScalarInternal();
+        public override object ExecuteScalar() => ExecuteScalar(false, CancellationToken.None).GetAwaiter().GetResult();
 
         /// <summary>
-        /// Asynchronous version of <see cref="ExecuteScalar"/>
+        /// Asynchronous version of <see cref="ExecuteScalar()"/>
         /// </summary>
         /// <param name="cancellationToken">The token to monitor for cancellation requests.</param>
         /// <returns>A task representing the asynchronous operation, with the first column of the
         /// first row in the result set, or a null reference if the result set is empty.</returns>
+        [ItemCanBeNull]
         public override async Task<object> ExecuteScalarAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             using (NoSynchronizationContextScope.Enter())
             using (cancellationToken.Register(Cancel))
-                return await ExecuteScalarInternalAsync(cancellationToken);
+                return await ExecuteScalar(true, cancellationToken);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [RewriteAsync]
-        [CanBeNull]
-        object ExecuteScalarInternal()
+        [ItemCanBeNull]
+        async Task<object> ExecuteScalar(bool async, CancellationToken cancellationToken)
         {
             var connector = CheckReadyAndGetConnector();
             using (connector.StartUserAction(this))
             {
                 Log.Trace("ExecuteNonScalar", connector.Id);
-                using (var reader = Execute(CommandBehavior.SequentialAccess | CommandBehavior.SingleRow))
+                using (var reader = await Execute(CommandBehavior.SequentialAccess | CommandBehavior.SingleRow, async, cancellationToken))
                     return reader.Read() && reader.FieldCount != 0 ? reader.GetValue(0) : null;
             }
         }
@@ -1229,25 +1148,24 @@ namespace Npgsql
             cancellationToken.ThrowIfCancellationRequested();
             using (NoSynchronizationContextScope.Enter())
             using (cancellationToken.Register(Cancel))
-                return await ExecuteDbDataReaderInternalAsync(behavior, cancellationToken);
+                return await ExecuteDbDataReader(behavior, true, cancellationToken);
         }
 
         /// <summary>
         /// Executes the command text against the connection.
         /// </summary>
         [NotNull]
-        protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior) => ExecuteDbDataReaderInternal(behavior);
+        protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior) => ExecuteDbDataReader(behavior, false, CancellationToken.None).GetAwaiter().GetResult();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [RewriteAsync]
-        NpgsqlDataReader ExecuteDbDataReaderInternal(CommandBehavior behavior)
+        async Task<NpgsqlDataReader> ExecuteDbDataReader(CommandBehavior behavior, bool async, CancellationToken cancellationToken)
         {
             var connector = CheckReadyAndGetConnector();
             connector.StartUserAction(this);
             try
             {
                 Log.Trace("ExecuteReader", connector.Id);
-                return Execute(behavior);
+                return await Execute(behavior, async, cancellationToken);
             }
             catch
             {
@@ -1427,15 +1345,6 @@ namespace Npgsql
             if (Connection == null)
                 throw new InvalidOperationException("Connection property has not been initialized.");
             return Connection.CheckReadyAndGetConnector();
-        }
-
-        enum SendState
-        {
-            Start,
-            Parse,
-            Bind,
-            Describe,
-            Execute
         }
 
         #endregion

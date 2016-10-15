@@ -134,6 +134,41 @@ namespace Npgsql
             _writePosition = 0;
         }
 
+        internal async Task Flush(bool async, CancellationToken cancellationToken)
+        {
+            if (_writePosition == 0)
+                return;
+
+            try
+            {
+                if (async)
+                    await Underlying.WriteAsync(_buf, 0, _writePosition, cancellationToken);
+                else
+                    Underlying.Write(_buf, 0, _writePosition);
+            }
+            catch (Exception e)
+            {
+                Connector.Break();
+                throw new NpgsqlException("Exception while writing to stream", e);
+            }
+
+            try
+            {
+                if (async)
+                    await Underlying.FlushAsync(cancellationToken);
+                else
+                    Underlying.Flush();
+            }
+            catch (Exception e)
+            {
+                Connector.Break();
+                throw new NpgsqlException("Exception while flushing stream", e);
+            }
+
+            TotalBytesFlushed += _writePosition;
+            _writePosition = 0;
+        }
+
         [RewriteAsync]
         internal void DirectWrite(byte[] buffer, int offset, int count)
         {
@@ -261,6 +296,41 @@ namespace Npgsql
                 _buf[pos++] = _bitConverterUnion.b7;
             }
             _writePosition = pos;
+        }
+
+        internal async Task WriteString(string s, int byteLen, bool async, CancellationToken cancellationToken)
+        {
+            if (byteLen <= WriteSpaceLeft)
+            {
+                WriteString(s);
+            }
+            else if (byteLen <= Size)
+            {
+                // String can fit entirely in an empty buffer. Flush and retry rather than
+                // going into the partial writing flow below (which requires ToCharArray())
+                await Flush(async, cancellationToken);
+                WriteString(s);
+            }
+            else
+            {
+                var charPos = 0;
+
+                while (true)
+                {
+                    int charsUsed;
+                    bool completed;
+#if NETSTANDARD1_3
+                    _queryChars = Query.ToCharArray();
+                    WriteStringChunked(_queryChars, _charPos, s.Length - _charPos, true, out charsUsed, out completed);
+#else
+                    WriteStringChunked(s, charPos, s.Length - charPos, true, out charsUsed, out completed);
+#endif
+                    if (completed)
+                        break;
+                    await Flush(async, cancellationToken);
+                    charPos += charsUsed;
+                }
+            }
         }
 
         internal void WriteString(string s, int len = 0)
