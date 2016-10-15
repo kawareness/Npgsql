@@ -78,13 +78,7 @@ namespace Npgsql
         /// </summary>
         public IReadOnlyList<NpgsqlStatement> Statements => _statements.AsReadOnly();
 
-        /*
-        /// <summary>
-        /// If part of the send happens asynchronously (see <see cref="SendRemaining"/>,
-        /// the Task for that remaining send is stored here.
-        /// </summary>
-        */
-        internal Task RemainingSendTask;
+        internal Task CurrentSendTask;
 
         UpdateRowSource _updateRowSource = UpdateRowSource.Both;
 
@@ -735,12 +729,23 @@ namespace Npgsql
                 {
                     _connector.UserTimeout = CommandTimeout * 1000;
 
+                    // We do not wait for the entire send to complete before proceeding to reading -
+                    // the sending continues in parallel with the user's reading. Waiting for the
+                    // entire send to complete would trigger a deadlock for multistatement commands,
+                    // where PostgreSQL sends large results for the first statement, while we're sending large
+                    // parameter data for the second. See #641.
+                    // Instead, all sends for non-first statements and for non-first buffers are performed
+                    // asynchronously (even if the user requested sync), in a special synchronization context
+                    // to prevents a dependency on the thread pool (which would also trigger deadlocks).
+                    // The WriteBuffer notifies this command when the first buffer flush occurs, so that the
+                    // send functions can switch to the special async mode when needed.
+
                     if (IsPrepared)
-                        await SendExecutePrepared(async, cancellationToken);
+                        CurrentSendTask = SendWrapper(SendExecutePrepared, async, cancellationToken);
                     else if ((behavior & CommandBehavior.SchemaOnly) == 0)
-                        await SendExecuteNonPrepared(async, cancellationToken);
+                        CurrentSendTask = SendWrapper(SendExecuteNonPrepared, async, cancellationToken);
                     else
-                        await SendParseDescribe(async, cancellationToken);
+                        CurrentSendTask = SendWrapper(SendParseDescribe, async, cancellationToken);
                 }
 
                 var reader = new NpgsqlDataReader(this, behavior, _statements);
@@ -857,16 +862,38 @@ namespace Npgsql
         /// </summary>
         internal void CompleteRemainingSend()
         {
-            if (RemainingSendTask != null)
+            if (CurrentSendTask != null)
             {
-                RemainingSendTask.Wait();
-                RemainingSendTask = null;
+                CurrentSendTask.Wait();
+                CurrentSendTask = null;
             }
         }
 
         #endregion
 
         #region Message Creation / Population
+
+        internal bool FlushOccurred { get; set; }
+
+        async Task SendWrapper(Func<bool, CancellationToken, Task> sender, bool async, CancellationToken cancellationToken)
+        {
+            _connector.WriteBuffer.CurrentCommand = this;
+            FlushOccurred = false;
+            await sender(async, cancellationToken);
+            _connector.WriteBuffer.CurrentCommand = null;
+            SynchronizationContext.SetSynchronizationContext(null);
+
+            /*
+            return sender(async, cancellationToken).ContinueWith((t,o) =>
+            {
+                if (!t.IsFaulted)
+                {
+                    ((WriteBuffer)o).CurrentCommand = null;
+                    SynchronizationContext.SetSynchronizationContext(null);
+                }
+            }, _connector.WriteBuffer, cancellationToken);
+            */
+        }
 
         /// <summary>
         /// Populates the send buffer with protocol messages for the execution of non-prepared statement(s).
@@ -882,6 +909,12 @@ namespace Npgsql
             var buf = _connector.WriteBuffer;
             for (var i = 0; i < _statements.Count; i++)
             {
+                if (FlushOccurred)
+                {
+                    async = true;
+                    SynchronizationContext.SetSynchronizationContext(SingleThreadSynchronizationContext);
+                }
+
                 var statement = _statements[i];
 
                 await _connector.ParseMessage
@@ -922,6 +955,12 @@ namespace Npgsql
             var buf = _connector.WriteBuffer;
             for (var i = 0; i < _statements.Count; i++)
             {
+                if (FlushOccurred)
+                {
+                    async = true;
+                    SynchronizationContext.SetSynchronizationContext(SingleThreadSynchronizationContext);
+                }
+
                 var statement = _statements[i];
 
                 var bind = _connector.BindMessage;
@@ -950,6 +989,11 @@ namespace Npgsql
                 // Statement doesn't need preparation (persistent)
                 if (statement.IsPrepared)
                     continue;
+                if (FlushOccurred)
+                {
+                    async = true;
+                    SynchronizationContext.SetSynchronizationContext(SingleThreadSynchronizationContext);
+                }
 
                 await _connector.ParseMessage
                     .Populate(statement, _connector.TypeHandlerRegistry)
@@ -970,6 +1014,12 @@ namespace Npgsql
             var buf = _connector.WriteBuffer;
             foreach (var statement in _statements)
             {
+                if (FlushOccurred)
+                {
+                    async = true;
+                    SynchronizationContext.SetSynchronizationContext(SingleThreadSynchronizationContext);
+                }
+
                 await _connector.CloseMessage
                     .Populate(StatementOrPortal.Statement, statement.PreparedStatementName)
                     .Write(buf, async, cancellationToken);

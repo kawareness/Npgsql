@@ -167,7 +167,12 @@ namespace Npgsql
 
             TotalBytesFlushed += _writePosition;
             _writePosition = 0;
+            if (CurrentCommand != null)
+                CurrentCommand.FlushOccurred = true;
         }
+
+        [CanBeNull]
+        internal NpgsqlCommand CurrentCommand { get; set; }
 
         [RewriteAsync]
         internal void DirectWrite(byte[] buffer, int offset, int count)
