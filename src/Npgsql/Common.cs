@@ -78,9 +78,9 @@ namespace Npgsql
 
         internal sealed override async Task Write(WriteBuffer buf, bool async, CancellationToken cancellationToken)
         {
-            Debug.Assert(Length < buf.UsableSize, $"Message of type {GetType().Name} has length {Length} which is bigger than the buffer ({buf.UsableSize})");
             if (buf.WriteSpaceLeft < Length)
                 await buf.Flush(async, cancellationToken);
+            Debug.Assert(Length <= buf.WriteSpaceLeft, $"Message of type {GetType().Name} has length {Length} which is bigger than the buffer ({buf.WriteSpaceLeft})");
             WriteFully(buf);
         }
     }

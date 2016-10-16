@@ -44,24 +44,9 @@ namespace Npgsql
         /// <summary>
         /// The total byte length of the buffer.
         /// </summary>
-        internal int Size { get; }
+        internal int Size { get; private set; }
 
-        /// <summary>
-        /// During copy operations, the buffer's usable size is smaller than its total size because of the CopyData
-        /// message header. This distinction is important since some type handlers check how much space is left
-        /// in the buffer in their decision making.
-        /// </summary>
-        internal int UsableSize
-        {
-            get { return _usableSize; }
-            set
-            {
-                Debug.Assert(value <= Size);
-                _usableSize = value;
-            }
-        }
-
-        int _usableSize;
+        bool _copyMode;
         internal Encoding TextEncoding { get; }
 
         internal int WritePosition { get { return _writePosition; } set { _writePosition = value; } }
@@ -94,7 +79,6 @@ namespace Npgsql
             Connector = connector;
             Underlying = stream;
             Size = size;
-            UsableSize = Size;
             _buf = new byte[Size];
             TextEncoding = textEncoding;
             _textEncoder = TextEncoding.GetEncoder();
@@ -104,39 +88,20 @@ namespace Npgsql
 
         #region I/O
 
-        [RewriteAsync]
-        internal void Flush()
-        {
-            if (_writePosition == 0)
-                return;
-
-            try
-            {
-                Underlying.Write(_buf, 0, _writePosition);
-            }
-            catch (Exception e)
-            {
-                Connector.Break();
-                throw new NpgsqlException("Exception while writing to stream", e);
-            }
-
-            try
-            {
-                Underlying.Flush();
-            }
-            catch (Exception e)
-            {
-                Connector.Break();
-                throw new NpgsqlException("Exception while flushing stream", e);
-            }
-
-            TotalBytesFlushed += _writePosition;
-            _writePosition = 0;
-        }
-
         internal async Task Flush(bool async, CancellationToken cancellationToken)
         {
-            if (_writePosition == 0)
+            if (_copyMode)
+            {
+                // In copy mode, we write CopyData messages. The message code has already been
+                // written to the beginning of the buffer, but we need to go back and write the
+                // length.
+                if (_writePosition == 1)
+                    return;
+                var pos = WritePosition;
+                _writePosition = 1;
+                WriteInt32(pos - 1);
+                _writePosition = pos;
+            } else if (_writePosition == 0)
                 return;
 
             try
@@ -169,15 +134,32 @@ namespace Npgsql
             _writePosition = 0;
             if (CurrentCommand != null)
                 CurrentCommand.FlushOccurred = true;
+            if (_copyMode)
+                WriteCopyDataHeader();
         }
+
+        internal void Flush() => Flush(false, CancellationToken.None).GetAwaiter().GetResult();
 
         [CanBeNull]
         internal NpgsqlCommand CurrentCommand { get; set; }
 
-        [RewriteAsync]
         internal void DirectWrite(byte[] buffer, int offset, int count)
         {
-            Debug.Assert(WritePosition == 0);
+            if (_copyMode)
+            {
+                // Flush has already written the CopyData header, need to update the length
+                Debug.Assert(WritePosition == 5);
+
+                WritePosition = 1;
+                WriteInt32(count + 4);
+                WritePosition = 5;
+                _copyMode = false;
+                Flush();
+                _copyMode = true;
+                WriteCopyDataHeader();
+            }
+            else
+                Debug.Assert(WritePosition == 0);
 
             try
             {
@@ -396,9 +378,9 @@ namespace Npgsql
             WriteByte(0);
         }
 
-#endregion
+        #endregion
 
-#region Write Complex
+        #region Write Complex
 
         internal void WriteStringChunked(char[] chars, int charIndex, int charCount,
                                          bool flush, out int charsUsed, out bool completed)
@@ -440,9 +422,38 @@ namespace Npgsql
         }
 #endif
 
-#endregion
+        #endregion
 
-#region Misc
+        #region Copy
+
+        internal void StartCopyMode()
+        {
+            _copyMode = true;
+            Size -= 5;
+            WriteCopyDataHeader();
+        }
+
+        internal void EndCopyMode()
+        {
+            // EndCopyMode is usually called after a Flush which ended the last CopyData message.
+            // That Flush also wrote the header for another CopyData which we clear here.
+            _copyMode = false;
+            Size += 5;
+            Clear();
+        }
+
+        void WriteCopyDataHeader()
+        {
+            Debug.Assert(_copyMode);
+            Debug.Assert(WritePosition == 0);
+            WriteByte((byte)BackendMessageCode.CopyData);
+            // Leave space for the message length
+            WriteInt32(0);
+        }
+
+        #endregion
+
+        #region Misc
 
         internal void Clear()
         {
@@ -483,6 +494,6 @@ namespace Npgsql
         }
 #pragma warning restore CA1051 // Do not declare visible instance fields
 
-#endregion
+        #endregion
     }
 }

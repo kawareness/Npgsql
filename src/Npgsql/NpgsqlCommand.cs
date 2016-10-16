@@ -78,6 +78,7 @@ namespace Npgsql
         /// </summary>
         public IReadOnlyList<NpgsqlStatement> Statements => _statements.AsReadOnly();
 
+        [CanBeNull]
         internal Task CurrentSendTask;
 
         UpdateRowSource _updateRowSource = UpdateRowSource.Both;
@@ -746,6 +747,12 @@ namespace Npgsql
                         CurrentSendTask = SendWrapper(SendExecuteNonPrepared, async, cancellationToken);
                     else
                         CurrentSendTask = SendWrapper(SendParseDescribe, async, cancellationToken);
+
+                    // The following is a hack. It raises an exception if one was thrown in the first phases
+                    // of the send (i.e. in parts of the send that executed synchronously). Exceptions may
+                    // still happen later and aren't properly handled. See #1323.
+                    if (CurrentSendTask.IsFaulted)
+                        CurrentSendTask.GetAwaiter().GetResult();
                 }
 
                 var reader = new NpgsqlDataReader(this, behavior, _statements);
@@ -767,96 +774,6 @@ namespace Npgsql
 
         #region Send
 
-
-#if OLD
-        delegate bool PopulateMethod(ref DirectBuffer directBuf);
-
-        [RewriteAsync]
-        void Send(PopulateMethod populateMethod)
-        {
-            while (true)
-            {
-                var directBuf = new DirectBuffer();
-                var completed = populateMethod(ref directBuf);
-                _connector.SendBuffer();
-                if (completed)
-                    break;  // Sent all messages
-
-                // The following is an optimization hack for writing large byte arrays without passing
-                // through our buffer
-                if (directBuf.Buffer != null)
-                {
-                    _connector.WriteBuffer.DirectWrite(directBuf.Buffer, directBuf.Offset, directBuf.Size == 0 ? directBuf.Buffer.Length : directBuf.Size);
-                    directBuf.Buffer = null;
-                    directBuf.Size = 0;
-                }
-
-                if (_writeStatementIndex > 0)
-                {
-                    // We've send all the messages for the first statement in a multistatement command.
-                    // If we continue blocking writes for the rest of the messages, we risk a deadlock where
-                    // PostgreSQL sends large results for the first statement, while we're sending large
-                    // parameter data for the second. To avoid this, switch to async sends. See #641
-
-                    // When performing async sends here, our regular async code will do ConfigureAwait(false),
-                    // sending continuations to the thread pool. However, this is a synchronous operation -
-                    // so a deadlock may occur where TP threads synchronously block on database input which won't
-                    // become because async continuations can't run (TP is starved).
-                    // To work around this, we send all async continuations to a special synchronization context
-                    // which executes them on a special thread.
-
-                    var callerSyncContext = SynchronizationContext.Current;
-                    SynchronizationContext.SetSynchronizationContext(SingleThreadSynchronizationContext);
-                    try
-                    {
-                        RemainingSendTask = SendRemaining(populateMethod, CancellationToken.None);
-                    }
-                    finally
-                    {
-                        SynchronizationContext.SetSynchronizationContext(callerSyncContext);
-                    }
-
-                    return;
-                }
-            }
-        }
-
-        /// <summary>
-        /// This method is used to asynchronously sends all remaining protocol messages for statements
-        /// beyond the first one, and *without* waiting for the send to complete. This technique is
-        /// used to avoid the deadlock described in #641 by allowing the user to read query results
-        /// while at the same time sending messages for later statements.
-        /// </summary>
-        async Task SendRemaining(PopulateMethod populateMethod, CancellationToken cancellationToken)
-        {
-            Debug.Assert(_writeStatementIndex > 0);
-            try
-            {
-                while (true)
-                {
-                    var directBuf = new DirectBuffer();
-                    var completed = populateMethod(ref directBuf);
-                    await _connector.SendBufferAsync(cancellationToken);
-                    if (completed)
-                        return; // Sent all messages
-
-                    // The following is an optimization hack for writing large byte arrays without passing
-                    // through our buffer
-                    if (directBuf.Buffer != null)
-                    {
-                        await _connector.WriteBuffer.DirectWriteAsync(directBuf.Buffer, directBuf.Offset,
-                                directBuf.Size == 0 ? directBuf.Buffer.Length : directBuf.Size, cancellationToken);
-                        directBuf.Buffer = null;
-                        directBuf.Size = 0;
-                    }
-                }
-            }
-            catch (Exception e)
-            {
-                Log.Error("Exception while asynchronously sending remaining messages", e, _connector.Id);
-            }
-        }
-#endif
         /// <summary>
         /// Waits until any background async send task completes.
         /// </summary>

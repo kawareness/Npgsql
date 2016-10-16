@@ -823,7 +823,7 @@ namespace Npgsql
         internal void SendMessage(FrontendMessage message)
         {
             message.Write(WriteBuffer, false, CancellationToken.None).Wait();
-            WriteBuffer.Flush(false, CancellationToken.None).Wait();
+            WriteBuffer.Flush();
         }
 
         #endregion

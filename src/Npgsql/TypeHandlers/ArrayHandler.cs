@@ -322,12 +322,12 @@ namespace Npgsql.TypeHandlers
                 4 +               // ndim
                 4 +               // has_nulls
                 4 +               // element_oid
-                dimensions * 8;  // dim (4) + lBound (4)
+                dimensions * 8;   // dim (4) + lBound (4)
 
             if (buf.WriteSpaceLeft < len)
             {
-                Debug.Assert(buf.UsableSize >= len, "Buffer too small for header");
                 await buf.Flush(async, cancellationToken);
+                Debug.Assert(buf.WriteSpaceLeft >= len, "Buffer too small for header");
             }
 
             buf.WriteInt32(dimensions);
@@ -398,12 +398,10 @@ namespace Npgsql.TypeHandlers
             var asGenericList = value as IList<TElement2>;
             if (asGenericList != null)
             {
-                if (lengthCache == null) {
+                if (lengthCache == null)
                     lengthCache = new LengthCache(1);
-                }
-                if (lengthCache.IsPopulated) {
+                if (lengthCache.IsPopulated)
                     return lengthCache.Get();
-                }
                 // Leave empty slot for the entire array length, and go ahead an populate the element slots
                 var pos = lengthCache.Position;
                 lengthCache.Set(0);
@@ -423,12 +421,10 @@ namespace Npgsql.TypeHandlers
             var asNonGenericList = value as IList;
             if (asNonGenericList != null)
             {
-                if (lengthCache == null) {
+                if (lengthCache == null)
                     lengthCache = new LengthCache(1);
-                }
-                if (lengthCache.IsPopulated) {
+                if (lengthCache.IsPopulated)
                     return lengthCache.Get();
-                }
                 var asMultidimensional = value as Array;
                 var dimensions = asMultidimensional?.Rank ?? 1;
 
@@ -452,9 +448,8 @@ namespace Npgsql.TypeHandlers
 
         int GetSingleElementLength([CanBeNull] object element, ref LengthCache lengthCache, NpgsqlParameter parameter=null)
         {
-            if (element == null || element is DBNull) {
+            if (element == null || element is DBNull)
                 return 0;
-            }
             var asChunkingWriter = ElementHandler as IChunkingTypeHandler;
             try
             {
