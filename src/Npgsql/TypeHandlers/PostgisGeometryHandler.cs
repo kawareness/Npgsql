@@ -367,7 +367,7 @@ namespace Npgsql.TypeHandlers
             throw new InvalidCastException("IGeometry type expected.");
         }
 
-        public override Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
+        protected override Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
             bool async, CancellationToken cancellationToken)
         {
             var bytes = value as byte[];
@@ -375,7 +375,7 @@ namespace Npgsql.TypeHandlers
             {
                 if (_byteaHandler == null)
                     throw new NpgsqlException("Bytea handler was not found during initialization of PostGIS handler");
-                return _byteaHandler.Write(bytes, buf, lengthCache, parameter, async, cancellationToken);
+                return _byteaHandler.WriteInternal(bytes, buf, lengthCache, parameter, async, cancellationToken);
             }
 
             return Write((PostgisGeometry)value, buf, lengthCache, parameter, async, cancellationToken);

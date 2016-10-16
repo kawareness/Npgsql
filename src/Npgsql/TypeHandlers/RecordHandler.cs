@@ -128,7 +128,7 @@ namespace Npgsql.TypeHandlers
             throw new NotSupportedException("Can't write record types");
         }
 
-        public override Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
+        protected override Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
             bool async, CancellationToken cancellationToken)
         {
             throw new NotSupportedException("Can't write record types");

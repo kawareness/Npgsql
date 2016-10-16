@@ -106,8 +106,7 @@ namespace Npgsql.TypeHandlers
             throw CreateConversionException(value.GetType());
         }
 
-        public override async Task Write(
-            object value, WriteBuffer buf, LengthCache lengthCache, [CanBeNull] NpgsqlParameter parameter,
+        protected override async Task Write(object value, WriteBuffer buf, LengthCache lengthCache, [CanBeNull] NpgsqlParameter parameter,
             bool async, CancellationToken cancellationToken)
         {
             ArraySegment<byte> segment;
@@ -139,6 +138,11 @@ namespace Npgsql.TypeHandlers
             await buf.Flush(async, cancellationToken);
             buf.DirectWrite(segment.Array, segment.Offset, segment.Count);
         }
+
+        internal Task WriteInternal(object value, WriteBuffer buf, LengthCache lengthCache,
+                [CanBeNull] NpgsqlParameter parameter,
+                bool async, CancellationToken cancellationToken)
+            => Write(value, buf, lengthCache, parameter, async, cancellationToken);
 
         #endregion
     }

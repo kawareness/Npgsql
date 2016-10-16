@@ -60,7 +60,6 @@ namespace Npgsql.TypeHandlers
         Array _readValue;
         ReadState _readState;
         ReadBuffer _readBuf;
-        LengthCache _lengthCache;
         FieldDescription _fieldDescription;
         int _dimensions;
         int[] _dimLengths, _indices;
@@ -307,7 +306,7 @@ namespace Npgsql.TypeHandlers
 
         #region Write
 
-        public override Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
+        protected override Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
             bool async, CancellationToken cancellationToken)
             => Write<TElement>(value, buf, lengthCache, parameter, async, cancellationToken);
 
@@ -348,43 +347,7 @@ namespace Npgsql.TypeHandlers
             }
 
             foreach (var element in writeValue)
-                await WriteSingleElement(element, buf, lengthCache, async, cancellationToken);
-        }
-
-        async Task WriteSingleElement([CanBeNull] object element, WriteBuffer buf, LengthCache lengthCache,
-            bool async, CancellationToken cancellationToken)
-        {
-            // TODO: Need generic version of this...
-            if (element == null || element is DBNull)
-            {
-                if (buf.WriteSpaceLeft < 4)
-                    await buf.Flush(async, cancellationToken);
-                buf.WriteInt32(-1);
-                return;
-            }
-
-            var asSimpleWriter = ElementHandler as ISimpleTypeHandler;
-            if (asSimpleWriter != null)
-            {
-                var elementLen = asSimpleWriter.ValidateAndGetLength(element, null);
-                if (buf.WriteSpaceLeft < 4 + elementLen)
-                    await buf.Flush(async, cancellationToken);
-                buf.WriteInt32(elementLen);
-                asSimpleWriter.Write(element, buf, null);
-                return;
-            }
-
-            var asChunkedWriter = ElementHandler as IChunkingTypeHandler;
-            if (asChunkedWriter != null)
-            {
-                if (buf.WriteSpaceLeft < 4)
-                    await buf.Flush(async, cancellationToken);
-                buf.WriteInt32(asChunkedWriter.ValidateAndGetLength(element, ref _lengthCache, null));
-                await asChunkedWriter.Write(element, buf, lengthCache, null, async, cancellationToken);
-                return;
-            }
-
-            throw new InvalidOperationException("Internal Npgsql bug, please report.");
+                await ElementHandler.WriteWithLength(element, buf, lengthCache, null, async, cancellationToken);
         }
 
         public override int ValidateAndGetLength(object value, ref LengthCache lengthCache, NpgsqlParameter parameter = null)
@@ -450,11 +413,9 @@ namespace Npgsql.TypeHandlers
         {
             if (element == null || element is DBNull)
                 return 0;
-            var asChunkingWriter = ElementHandler as IChunkingTypeHandler;
             try
             {
-                return asChunkingWriter?.ValidateAndGetLength(element, ref lengthCache, parameter) ??
-                       ((ISimpleTypeHandler) ElementHandler).ValidateAndGetLength(element, null);
+                return ElementHandler.ValidateAndGetLength(element, ref lengthCache, parameter);
             }
             catch (Exception e)
             {

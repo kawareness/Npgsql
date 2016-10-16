@@ -254,7 +254,7 @@ namespace Npgsql.TypeHandlers
                 return lengthCache.Set(_encoding.GetByteCount(p, parameter.Size));
         }
 
-        public override Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
+        protected override Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
             bool async, CancellationToken cancellationToken)
         {
             if (parameter?.ConvertedValue != null)
@@ -338,6 +338,6 @@ namespace Npgsql.TypeHandlers
 
         #endregion
 
-        public TextReader GetTextReader(Stream stream) => new StreamReader(stream);
+        public virtual TextReader GetTextReader(Stream stream) => new StreamReader(stream);
     }
 }

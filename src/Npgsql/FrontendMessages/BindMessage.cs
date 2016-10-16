@@ -125,7 +125,11 @@ namespace Npgsql.FrontendMessages
 
             buf.WriteInt16(InputParameters.Count);
 
-            await WriteParameters(buf, async, cancellationToken);
+            foreach (var param in InputParameters)
+            {
+                param.LengthCache?.Rewind();
+                await param.WriteWithLength(buf, async, cancellationToken);
+            }
 
             if (UnknownResultTypeList != null)
             {
@@ -141,45 +145,6 @@ namespace Npgsql.FrontendMessages
                     await buf.Flush(async, cancellationToken);
                 buf.WriteInt16(1);
                 buf.WriteInt16(AllResultTypesAreUnknown ? 0 : 1);
-            }
-        }
-
-        async Task WriteParameters(WriteBuffer buf, bool async, CancellationToken cancellationToken)
-        {
-            foreach (var param in InputParameters)
-            {
-                if (param.Value is DBNull)
-                {
-                    if (buf.WriteSpaceLeft < 4)
-                        await buf.Flush(async, cancellationToken);
-                    buf.WriteInt32(-1);
-                    continue;
-                }
-
-                param.LengthCache?.Rewind();
-
-                var handler = param.Handler;
-
-                // TODO: Refactor into the type handler base classes?
-                var asChunkingWriter = handler as IChunkingTypeHandler;
-                if (asChunkingWriter != null)
-                {
-                    if (buf.WriteSpaceLeft < 4)
-                        await buf.Flush(async, cancellationToken);
-                    buf.WriteInt32(param.ValidateAndGetLength());
-                    await asChunkingWriter.Write(param.Value, buf, param.LengthCache, param, async, cancellationToken);
-                    continue;
-                }
-
-                var len = param.ValidateAndGetLength();
-                var asSimpleWriter = (ISimpleTypeHandler)handler;
-                if (buf.WriteSpaceLeft < len + 4)
-                {
-                    Debug.Assert(buf.Size >= len + 4);
-                    await buf.Flush(async, cancellationToken);
-                }
-                buf.WriteInt32(len);
-                asSimpleWriter.Write(param.Value, buf, param);
             }
         }
 

@@ -79,15 +79,15 @@ namespace Npgsql.TypeHandlers
                 totalLen += 8;   // Key length + value length
                 if (kv.Key == null)
                     throw new FormatException("HSTORE doesn't support null keys");
-                totalLen += lengthCache.Set(Encoding.UTF8.GetByteCount(kv.Key));
+                totalLen += _textHandler.ValidateAndGetLength(kv.Key, ref lengthCache);
                 if (kv.Value != null)
-                    totalLen += lengthCache.Set(Encoding.UTF8.GetByteCount(kv.Value));
+                    totalLen += _textHandler.ValidateAndGetLength(kv.Value, ref lengthCache);
             }
 
             return lengthCache.Lengths[pos] = totalLen;
         }
 
-        public override async Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
+        protected override async Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
             bool async, CancellationToken cancellationToken)
         {
             var asDict = (IDictionary<string, string>)value;
@@ -100,22 +100,8 @@ namespace Npgsql.TypeHandlers
 
             foreach (var kv in asDict)
             {
-                if (buf.WriteSpaceLeft < 4)
-                    await buf.Flush(async, cancellationToken);
-                var keyLen = lengthCache.Get();
-                buf.WriteInt32(keyLen);
-                await _textHandler.Write(kv.Key, buf, lengthCache, parameter, async, cancellationToken);
-
-                if (buf.WriteSpaceLeft < 4)
-                    await buf.Flush(async, cancellationToken);
-                if (kv.Value == null)
-                {
-                    buf.WriteInt32(-1);
-                    continue;
-                }
-                var valueLen = lengthCache.Get();
-                buf.WriteInt32(valueLen);
-                await _textHandler.Write(kv.Value, buf, lengthCache, parameter, async, cancellationToken);
+                await _textHandler.WriteWithLength(kv.Key, buf, lengthCache, parameter, async, cancellationToken);
+                await _textHandler.WriteWithLength(kv.Value, buf, lengthCache, parameter, async, cancellationToken);
             }
         }
 

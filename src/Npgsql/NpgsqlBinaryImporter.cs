@@ -181,52 +181,14 @@ namespace Npgsql
         {
             try
             {
-                if (_buf.WriteSpaceLeft < 4)
-                    _buf.Flush();
-
-                var asObject = (object)value; // TODO: Implement boxless writing in the future
-                if (asObject == null)
-                {
-                    _buf.WriteInt32(-1);
-                    _column++;
-                    return;
-                }
-
+                // We simulate the regular writing process with a validation/length calculation pass,
+                // followed by a write pass
                 _dummyParam.ConvertedValue = null;
-
-                var asSimple = handler as ISimpleTypeHandler;
-                if (asSimple != null)
-                {
-                    var len = asSimple.ValidateAndGetLength(asObject, _dummyParam);
-                    _buf.WriteInt32(len);
-                    if (_buf.WriteSpaceLeft < len)
-                        _buf.Flush();
-                    asSimple.Write(asObject, _buf, _dummyParam);
-                    _column++;
-                    return;
-                }
-
-                var asChunking = handler as IChunkingTypeHandler;
-                if (asChunking != null)
-                {
-                    _lengthCache.Clear();
-                    var len = asChunking.ValidateAndGetLength(asObject, ref _lengthCache, _dummyParam);
-                    _buf.WriteInt32(len);
-
-                    // If the type handler used the length cache, rewind it to skip the first position:
-                    // it contains the entire value length which we already have in len.
-                    if (_lengthCache.Position > 0)
-                    {
-                        _lengthCache.Rewind();
-                        _lengthCache.Position++;
-                    }
-
-                    asChunking.Write(asObject, _buf, _lengthCache, _dummyParam, false, CancellationToken.None);
-                    _column++;
-                    return;
-                }
-
-                throw new InvalidOperationException($"Internal Npgsql bug, please report.");
+                _lengthCache.Clear();
+                handler.ValidateAndGetLength(value, ref _lengthCache, _dummyParam);
+                _lengthCache.Rewind();
+                handler.WriteWithLength(value, _buf, _lengthCache, _dummyParam, false, CancellationToken.None);
+                _column++;
             }
             catch
             {

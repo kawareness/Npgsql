@@ -197,15 +197,12 @@ namespace Npgsql.TypeHandlers
                 var fieldValue = f.GetValue(value);
                 if (fieldValue == null)
                     continue;
-
-                var asChunkingWriter = f.Handler as IChunkingTypeHandler;
-                totalLen += asChunkingWriter?.ValidateAndGetLength(fieldValue, ref lengthCache, parameter) ??
-                    ((ISimpleTypeHandler)f.Handler).ValidateAndGetLength(fieldValue, null);
+                totalLen += f.Handler.ValidateAndGetLength(fieldValue, ref lengthCache);
             }
             return lengthCache.Lengths[pos] = totalLen;
         }
 
-        public override async Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
+        protected override async Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
             bool async, CancellationToken cancellationToken)
         {
             var composite = (T)value;
@@ -219,37 +216,11 @@ namespace Npgsql.TypeHandlers
                 var fieldHandler = fieldDescriptor.Handler;
                 var fieldValue = fieldDescriptor.GetValue(composite);
 
-                if (buf.WriteSpaceLeft < 8)
+                if (buf.WriteSpaceLeft < 4)
                     await buf.Flush(async, cancellationToken);
 
                 buf.WriteUInt32(fieldHandler.PostgresType.OID);
-
-                if (fieldValue == null)
-                {
-                    buf.WriteInt32(-1);
-                    continue;
-                }
-
-                var asSimpleWriter = fieldHandler as ISimpleTypeHandler;
-                if (asSimpleWriter != null)
-                {
-                    var elementLen = asSimpleWriter.ValidateAndGetLength(fieldValue, null);
-                    buf.WriteInt32(elementLen);
-                    if (buf.WriteSpaceLeft < elementLen)
-                        await buf.Flush(async, cancellationToken);
-                    asSimpleWriter.Write(fieldValue, buf, null);
-                    continue;
-                }
-
-                var asChunkedWriter = fieldHandler as IChunkingTypeHandler;
-                if (asChunkedWriter != null)
-                {
-                    buf.WriteInt32(asChunkedWriter.ValidateAndGetLength(fieldValue, ref lengthCache, null));
-                    await asChunkedWriter.Write(fieldValue, buf, lengthCache, null, async, cancellationToken);
-                    continue;
-                }
-
-                throw new InvalidOperationException("Internal Npgsql bug, please report.");
+                await fieldHandler.WriteWithLength(fieldValue, buf, lengthCache, null, async, cancellationToken);
             }
         }
 
