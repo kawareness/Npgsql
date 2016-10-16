@@ -23,6 +23,8 @@
 
 using System;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using JetBrains.Annotations;
 using Npgsql.BackendMessages;
 using Npgsql.PostgresTypes;
@@ -47,7 +49,6 @@ namespace Npgsql.TypeHandlers
         bool _handledVersion;
 
         ReadBuffer _readBuf;
-        WriteBuffer _writeBuf;
 
         /// <summary>
         /// The text handler which does most of the encoding/decoding work.
@@ -72,24 +73,13 @@ namespace Npgsql.TypeHandlers
             return _textHandler.ValidateAndGetLength(value, ref lengthCache, parameter) + 1;
         }
 
-        public override void PrepareWrite(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter = null)
+        public override async Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
+            bool async, CancellationToken cancellationToken)
         {
-            _textHandler.PrepareWrite(value, buf, lengthCache, parameter);
-            _writeBuf = buf;
-            _handledVersion = false;
-        }
-
-        public override bool Write(ref DirectBuffer directBuf)
-        {
-            if (!_handledVersion)
-            {
-                if (_writeBuf.WriteSpaceLeft < 1) { return false; }
-                _writeBuf.WriteByte(JsonbProtocolVersion);
-                _handledVersion = true;
-            }
-            if (!_textHandler.Write(ref directBuf)) { return false; }
-            _writeBuf = null;
-            return true;
+            if (buf.WriteSpaceLeft < 1)
+                await buf.Flush(async, cancellationToken);
+            buf.WriteByte(JsonbProtocolVersion);
+            await _textHandler.Write(value, buf, lengthCache, parameter, async, cancellationToken);
         }
 
         #endregion

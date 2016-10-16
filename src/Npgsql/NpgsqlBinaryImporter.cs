@@ -231,6 +231,8 @@ namespace Npgsql
                         _lengthCache.Position++;
                     }
 
+                    throw new NotImplementedException();
+                    /*
                     asChunking.PrepareWrite(asObject, _buf, _lengthCache, _dummyParam);
                     var directBuf = new DirectBuffer();
                     while (!asChunking.Write(ref directBuf))
@@ -254,6 +256,7 @@ namespace Npgsql
                     }
                     _column++;
                     return;
+                    */
                 }
 
                 throw new InvalidOperationException($"Internal Npgsql bug, please report.");

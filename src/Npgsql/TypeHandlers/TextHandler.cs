@@ -22,12 +22,15 @@
 #endregion
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using Npgsql.BackendMessages;
 using NpgsqlTypes;
 using System.Data;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using JetBrains.Annotations;
 using Npgsql.PostgresTypes;
 
@@ -57,14 +60,9 @@ namespace Npgsql.TypeHandlers
 
         #region State
 
-        [CanBeNull]
-        string _str;
-        [CanBeNull]
-        char[] _chars;
         byte[] _tempBuf;
-        int _byteLen, _charLen, _bytePos, _charPos;
+        int _byteLen, _bytePos, _charPos;
         ReadBuffer _readBuf;
-        WriteBuffer _writeBuf;
 
         readonly char[] _singleCharArray = new char[1];
 
@@ -256,39 +254,43 @@ namespace Npgsql.TypeHandlers
                 return lengthCache.Set(_encoding.GetByteCount(p, parameter.Size));
         }
 
-        public override void PrepareWrite(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter=null)
+        public override Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
+            bool async, CancellationToken cancellationToken)
         {
-            _writeBuf = buf;
-            _charPos = 0;
-            _byteLen = lengthCache.GetLast();
-
             if (parameter?.ConvertedValue != null)
                 value = parameter.ConvertedValue;
 
-            _str = value as string;
-            if (_str != null)
+            var str = value as string;
+            if (str != null)
             {
-                _charLen = parameter == null || parameter.Size <= 0 || parameter.Size >= _str.Length ? _str.Length : parameter.Size;
-                return;
+                return WriteString(str, buf, lengthCache, parameter, async, cancellationToken);
             }
 
-            _chars = value as char[];
-            if (_chars != null)
+            var chars = value as char[];
+            if (chars != null)
             {
-                _charLen = parameter == null || parameter.Size <= 0 || parameter.Size >= _chars.Length ? _chars.Length : parameter.Size;
-                return;
+                var charLen = parameter == null || parameter.Size <= 0 || parameter.Size >= chars.Length
+                    ? chars.Length
+                    : parameter.Size;
+                return buf.WriteChars(chars, charLen, lengthCache.GetLast(), async, cancellationToken);
             }
 
             if (value is char)
             {
                 _singleCharArray[0] = (char)value;
-                _chars = _singleCharArray;
-                _charLen = 1;
-                return;
+                return buf.WriteChars(_singleCharArray, 1, lengthCache.GetLast(), async, cancellationToken);
             }
 
-            _str = Convert.ToString(value);
-            _charLen = parameter == null || parameter.Size <= 0 || parameter.Size >= _str.Length ? _str.Length : parameter.Size;
+            return WriteString(Convert.ToString(value), buf, lengthCache, parameter, async, cancellationToken);
+        }
+
+        Task WriteString(string str, WriteBuffer buf, LengthCache lengthCache, [CanBeNull] NpgsqlParameter parameter,
+            bool async, CancellationToken cancellationToken)
+        {
+            var charLen = parameter == null || parameter.Size <= 0 || parameter.Size >= str.Length
+                ? str.Length
+                : parameter.Size;
+            return buf.WriteString(str, charLen, lengthCache.GetLast(), async, cancellationToken);
         }
 
 #if NETSTANDARD1_3
@@ -332,30 +334,6 @@ namespace Npgsql.TypeHandlers
             return true;
         }
 #else
-        public override bool Write(ref DirectBuffer directBuf)
-        {
-            int charsUsed;
-            bool completed;
-            if (_str != null)
-            {
-                _writeBuf.WriteStringChunked(_str, _charPos, _charLen - _charPos, true, out charsUsed, out completed);
-            }
-            else
-            {
-                Debug.Assert(_chars != null);
-                _writeBuf.WriteStringChunked(_chars, _charPos, _charLen - _charPos, true, out charsUsed, out completed);
-            }
-
-            _charPos += charsUsed;
-            if (!completed)
-                return false;
-
-            _str = null;
-            _chars = null;
-            _writeBuf = null;
-
-            return true;
-        }
 #endif
 
         #endregion

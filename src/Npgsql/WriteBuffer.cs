@@ -298,18 +298,55 @@ namespace Npgsql
             _writePosition = pos;
         }
 
-        internal async Task WriteString(string s, int byteLen, bool async, CancellationToken cancellationToken)
+        internal Task WriteString(string s, int byteLen, bool async, CancellationToken cancellationToken)
+            => WriteString(s, s.Length, byteLen, async, cancellationToken);
+
+        internal async Task WriteString(string s, int charLen, int byteLen, bool async, CancellationToken cancellationToken)
         {
             if (byteLen <= WriteSpaceLeft)
             {
-                WriteString(s);
+                WriteString(s, charLen);
             }
             else if (byteLen <= Size)
             {
                 // String can fit entirely in an empty buffer. Flush and retry rather than
                 // going into the partial writing flow below (which requires ToCharArray())
                 await Flush(async, cancellationToken);
-                WriteString(s);
+                WriteString(s, charLen);
+            }
+            else
+            {
+#if NETSTANDARD1_3
+                await WriteChars(s.ToCharArray(), charLen, byteLen, async, cancellationToken);
+                return;
+#else
+                var charPos = 0;
+                while (true)
+                {
+                    int charsUsed;
+                    bool completed;
+                    WriteStringChunked(s, charPos, charLen - charPos, true, out charsUsed, out completed);
+                    if (completed)
+                        break;
+                    await Flush(async, cancellationToken);
+                    charPos += charsUsed;
+                }
+#endif
+            }
+        }
+
+        internal async Task WriteChars(char[] chars, int charLen, int byteLen, bool async, CancellationToken cancellationToken)
+        {
+            if (byteLen <= WriteSpaceLeft)
+            {
+                WriteChars(chars, charLen);
+            }
+            else if (byteLen <= Size)
+            {
+                // String can fit entirely in an empty buffer. Flush and retry rather than
+                // going into the partial writing flow below (which requires ToCharArray())
+                await Flush(async, cancellationToken);
+                WriteChars(chars, charLen);
             }
             else
             {
@@ -319,12 +356,7 @@ namespace Npgsql
                 {
                     int charsUsed;
                     bool completed;
-#if NETSTANDARD1_3
-                    _queryChars = Query.ToCharArray();
-                    WriteStringChunked(_queryChars, _charPos, s.Length - _charPos, true, out charsUsed, out completed);
-#else
-                    WriteStringChunked(s, charPos, s.Length - charPos, true, out charsUsed, out completed);
-#endif
+                    WriteStringChunked(chars, charPos, charLen - charPos, true, out charsUsed, out completed);
                     if (completed)
                         break;
                     await Flush(async, cancellationToken);
@@ -359,9 +391,9 @@ namespace Npgsql
             WriteByte(0);
         }
 
-        #endregion
+#endregion
 
-        #region Write Complex
+#region Write Complex
 
         internal void WriteStringChunked(char[] chars, int charIndex, int charCount,
                                          bool flush, out int charsUsed, out bool completed)
@@ -403,9 +435,9 @@ namespace Npgsql
         }
 #endif
 
-        #endregion
+#endregion
 
-        #region Misc
+#region Misc
 
         internal void Clear()
         {
@@ -446,6 +478,6 @@ namespace Npgsql
         }
 #pragma warning restore CA1051 // Do not declare visible instance fields
 
-        #endregion
+#endregion
     }
 }

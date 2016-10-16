@@ -210,8 +210,8 @@ namespace Npgsql
     {
         void PrepareRead(ReadBuffer buf, int len, FieldDescription fieldDescription = null);
         int ValidateAndGetLength(object value, ref LengthCache lengthCache, [CanBeNull] NpgsqlParameter parameter);
-        void PrepareWrite(object value, WriteBuffer buf, LengthCache lengthCache, [CanBeNull] NpgsqlParameter parameter);
-        bool Write(ref DirectBuffer directBuf);
+        Task Write(object value, WriteBuffer buf, LengthCache lengthCache, [CanBeNull] NpgsqlParameter parameter,
+            bool async, CancellationToken cancellationToken);
         bool ReadAsObject(out object result);
     }
 
@@ -230,17 +230,8 @@ namespace Npgsql
         /// </param>
         public abstract int ValidateAndGetLength(object value, ref LengthCache lengthCache, NpgsqlParameter parameter = null);
 
-        /// <param name="value">the value to be written</param>
-        /// <param name="buf"></param>
-        /// <param name="lengthCache">a cache in which to store length(s) of values to be written</param>
-        /// <param name="parameter">
-        /// the <see cref="NpgsqlParameter"/> containing <paramref name="value"/>. Consulted for settings
-        /// which impact how to send the parameter, e.g. <see cref="NpgsqlParameter.Size"/>. Can be null.
-        /// <see cref="NpgsqlParameter.Size"/>.
-        /// </param>
-        public abstract void PrepareWrite(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter = null);
-
-        public abstract bool Write(ref DirectBuffer directBuf);
+        public abstract Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
+            bool async, CancellationToken cancellationToken);
 
         /// <remarks>
         /// A type handler may implement IChunkingTypeHandler for types other than its primary one.

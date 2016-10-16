@@ -25,6 +25,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using JetBrains.Annotations;
 using Npgsql.BackendMessages;
 using Npgsql.PostgresTypes;
@@ -69,14 +71,11 @@ namespace Npgsql.TypeHandlers
         List<MemberDescriptor> _members;
 
         ReadBuffer _readBuf;
-        WriteBuffer _writeBuf;
-        LengthCache _lengthCache;
         bool _preparedRead;
 
         int _fieldIndex;
         int _len;
         object _value;
-        bool _wroteFieldHeader;
 
         public Type CompositeType => typeof(T);
 
@@ -206,36 +205,28 @@ namespace Npgsql.TypeHandlers
             return lengthCache.Lengths[pos] = totalLen;
         }
 
-        public override void PrepareWrite(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter)
+        public override async Task Write(object value, WriteBuffer buf, LengthCache lengthCache, NpgsqlParameter parameter,
+            bool async, CancellationToken cancellationToken)
         {
-            _value = (T)value;
-            _writeBuf = buf;
-            _lengthCache = lengthCache;
-            _fieldIndex = -1;
-            _wroteFieldHeader = false;
-        }
+            var composite = (T)value;
 
-        public override bool Write(ref DirectBuffer directBuf)
-        {
-            if (_fieldIndex == -1)
-            {
-                if (_writeBuf.WriteSpaceLeft < 4) { return false; }
-                _writeBuf.WriteInt32(_members.Count);
-                _fieldIndex = 0;
-            }
+            if (buf.WriteSpaceLeft < 4)
+                await buf.Flush(async, cancellationToken);
+            buf.WriteInt32(_members.Count);
 
-            for (; _fieldIndex < _members.Count; _fieldIndex++)
+            foreach (var fieldDescriptor in _members)
             {
-                var fieldDescriptor = _members[_fieldIndex];
                 var fieldHandler = fieldDescriptor.Handler;
-                var fieldValue = fieldDescriptor.GetValue(_value);
+                var fieldValue = fieldDescriptor.GetValue(composite);
+
+                if (buf.WriteSpaceLeft < 8)
+                    await buf.Flush(async, cancellationToken);
+
+                buf.WriteUInt32(fieldHandler.PostgresType.OID);
 
                 if (fieldValue == null)
                 {
-                    if (_writeBuf.WriteSpaceLeft < 4)
-                        return false;
-                    _writeBuf.WriteUInt32(fieldHandler.PostgresType.OID);
-                    _writeBuf.WriteInt32(-1);
+                    buf.WriteInt32(-1);
                     continue;
                 }
 
@@ -243,36 +234,23 @@ namespace Npgsql.TypeHandlers
                 if (asSimpleWriter != null)
                 {
                     var elementLen = asSimpleWriter.ValidateAndGetLength(fieldValue, null);
-                    if (_writeBuf.WriteSpaceLeft < 8 + elementLen) { return false; }
-                    _writeBuf.WriteUInt32(fieldHandler.PostgresType.OID);
-                    _writeBuf.WriteInt32(elementLen);
-                    asSimpleWriter.Write(fieldValue, _writeBuf, null);
+                    buf.WriteInt32(elementLen);
+                    if (buf.WriteSpaceLeft < elementLen)
+                        await buf.Flush(async, cancellationToken);
+                    asSimpleWriter.Write(fieldValue, buf, null);
                     continue;
                 }
 
                 var asChunkedWriter = fieldHandler as IChunkingTypeHandler;
                 if (asChunkedWriter != null)
                 {
-                    if (!_wroteFieldHeader)
-                    {
-                        if (_writeBuf.WriteSpaceLeft < 8) { return false; }
-                        _writeBuf.WriteUInt32(fieldHandler.PostgresType.OID);
-                        _writeBuf.WriteInt32(asChunkedWriter.ValidateAndGetLength(fieldValue, ref _lengthCache, null));
-                        asChunkedWriter.PrepareWrite(fieldValue, _writeBuf, _lengthCache, null);
-                        _wroteFieldHeader = true;
-                    }
-                    if (!asChunkedWriter.Write(ref directBuf))
-                    {
-                        return false;
-                    }
-                    _wroteFieldHeader = false;
+                    buf.WriteInt32(asChunkedWriter.ValidateAndGetLength(fieldValue, ref lengthCache, null));
+                    await asChunkedWriter.Write(fieldValue, buf, lengthCache, null, async, cancellationToken);
                     continue;
                 }
 
                 throw new InvalidOperationException("Internal Npgsql bug, please report.");
             }
-
-            return true;
         }
 
         #endregion

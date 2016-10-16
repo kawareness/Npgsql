@@ -167,18 +167,7 @@ namespace Npgsql.FrontendMessages
                     if (buf.WriteSpaceLeft < 4)
                         await buf.Flush(async, cancellationToken);
                     buf.WriteInt32(param.ValidateAndGetLength());
-                    asChunkingWriter.PrepareWrite(param.Value, buf, param.LengthCache, param);
-
-                    var directBuf = new DirectBuffer();
-                    while (!asChunkingWriter.Write(ref directBuf))
-                    {
-                        await buf.Flush(async, cancellationToken);
-                        if (directBuf.Buffer != null)
-                        {
-                            buf.DirectWrite(directBuf.Buffer, directBuf.Offset, directBuf.Size == 0 ? directBuf.Buffer.Length : directBuf.Size);
-                            directBuf.Buffer = null;
-                        }
-                    }
+                    await asChunkingWriter.Write(param.Value, buf, param.LengthCache, param, async, cancellationToken);
                     continue;
                 }
 
